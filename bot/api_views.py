@@ -5,18 +5,21 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.views import APIView
 from rest_framework.generics import ListAPIView
+from .models import Disponibilidade
 from rest_framework.filters import OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.models import User
-
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.permissions import IsAuthenticated
 from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message
 from .serializers import (
     ClientConfigSerializer, ClientUserSerializer, PersonSerializer,
-    AppointmentSerializer, ConversationSerializer, MessageSerializer
+    AppointmentSerializer, ConversationSerializer, MessageSerializer, DisponibilidadeSerializer
 )
 from .utils import enviar_mensagem_whatsapp
 from .gessie_decisoes import gessie_agendar_consulta
+
 
 
 @api_view(["GET"])
@@ -29,6 +32,16 @@ def listar_funcionarios(request):
         return Response(data)
     return Response([], status=403)
 
+class DisponibilidadeViewSet(ModelViewSet):
+    queryset = Disponibilidade.objects.all()
+    serializer_class = DisponibilidadeSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        client_user_id = self.request.query_params.get("client_user_id")
+        if client_user_id:
+            return Disponibilidade.objects.filter(profissional_id=client_user_id)
+        return Disponibilidade.objects.none()
 
 class AuditoriaMensagensView(ListAPIView):
     serializer_class = MessageSerializer

@@ -1,7 +1,7 @@
 # bot/serializers.py
 
 from rest_framework import serializers
-from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message
+from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import ClientUser
@@ -34,7 +34,10 @@ class ClientUserSerializer(serializers.ModelSerializer):
 
         return ClientUser.objects.create(user=user, **validated_data)
 
-
+class DisponibilidadeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Disponibilidade
+        fields = '__all__'
 
 class ClientConfigSerializer(serializers.ModelSerializer):
     class Meta:
