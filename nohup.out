@@ -1,0 +1,10 @@
+Watching for file changes with StatReloader
+/home/softdotpro/Área de trabalho/chatbot6/gessievirtual/whatsapp_chatgpt/settings.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+April 24, 2025 - 09:57:32
+Django version 5.1.7, using settings 'whatsapp_chatgpt.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+

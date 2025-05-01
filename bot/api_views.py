@@ -19,6 +19,9 @@ from .serializers import (
 )
 from .utils import enviar_mensagem_whatsapp
 from .gessie_decisoes import gessie_agendar_consulta
+from django.utils.timezone import now
+from datetime import timedelta
+from bot.models import SilencioTemporario
 
 
 
@@ -196,16 +199,23 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
-    queryset = Conversation.objects.all().order_by('-created_at')
     serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
-        if hasattr(user, "clientuser"):
-            client = user.clientuser.client
-            return Conversation.objects.filter(message__person__client=client).distinct().order_by('-created_at')
-        return Conversation.objects.none()
+        try:
+            user = self.request.user
+            print("🔎 Usuário autenticado:", user)
+            if hasattr(user, "clientuser"):
+                client = user.clientuser.client
+                print("🔎 Cliente associado:", client)
+                return Conversation.objects.filter(
+                    message__person__client=client
+                ).distinct().order_by('-created_at')
+            return Conversation.objects.none()
+        except Exception as e:
+            print("❌ Erro em get_queryset do ConversationViewSet:", str(e))
+            return Conversation.objects.none()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -283,3 +293,17 @@ class GessieFunctionCallingView(APIView):
         except Exception as e:
             print("❌ Erro ao processar function calling:", str(e))
             return Response({"erro": str(e)}, status=500)
+
+
+@api_view(["POST"])
+def silenciar_gessie(request):
+    phone = request.data.get("phone")
+    minutos = int(request.data.get("minutos", 5))
+
+    if not phone:
+        return Response({"erro": "Telefone não fornecido."}, status=400)
+
+    ate = now() + timedelta(minutes=minutos)
+    SilencioTemporario.objects.update_or_create(phone=phone, defaults={"ate": ate})
+
+    return Response({"mensagem": f"Gessie silenciada até {ate}."})

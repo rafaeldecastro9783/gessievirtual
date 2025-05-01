@@ -1,16 +1,20 @@
 from datetime import datetime, timedelta
-from bot.models import Person, ClientUser, Appointment
-from bot.utils import enviar_mensagem_whatsapp, registrar_mensagem, obter_regra, obter_horarios_disponiveis_por_data
-from django.utils.timezone import now
-import requests
 import calendar
-
-
+import requests
+from django.utils.timezone import now as timezone_now
+from bot.models import Person, ClientUser, Appointment
+from bot.utils import (
+    enviar_mensagem_whatsapp,
+    registrar_mensagem,
+    obter_regra,
+    obter_horarios_disponiveis_por_data,
+)
 
 # 🔎 Busca o próximo horário disponível para um profissional
 def encontrar_proximo_horario_disponivel(profissional, data_desejada=None):
+    print("🔍 Buscando próximo horário disponível...")
     if not data_desejada:
-        data_desejada = datetime.now().date()
+        data_desejada = timezone_now().date()
 
     horarios_possiveis = [
         datetime.combine(data_desejada, datetime.strptime(h, "%H:%M").time())
@@ -25,12 +29,13 @@ def encontrar_proximo_horario_disponivel(profissional, data_desejada=None):
     horarios_ocupados = [dt.replace(second=0, microsecond=0) for dt in agendamentos]
 
     for horario in horarios_possiveis:
-        if horario.replace(second=0, microsecond=0) not in horarios_ocupados and horario > datetime.now():
+        if horario.replace(second=0, microsecond=0) not in horarios_ocupados and horario > timezone_now():
             return horario
     return None
 
 # 🤖 Função tradicional para análise automática
 def analisar_resposta_e_agendar(reply, phone, client_config):
+    print("🤖 Analisando resposta para agendamento...")
     resposta_normalizada = reply.lower()
 
     if any(p in resposta_normalizada for p in ["cancelar", "desmarcar", "remover", "quero cancelar", "desisti"]):
@@ -43,17 +48,12 @@ def analisar_resposta_e_agendar(reply, phone, client_config):
     if any(p in resposta_normalizada for p in ["agendei", "consulta marcada", "vamos marcar", "agendado", "vou agendar"]):
         pessoa, _ = Person.objects.get_or_create(
             telefone=phone,
-            defaults={
-                "nome": "Novo contato",
-                "client": client_config,
-                "grau_interesse": "médio"
-            }
+            defaults={"nome": "Novo contato", "client": client_config, "grau_interesse": "médio"}
         )
 
         profissional = ClientUser.objects.filter(client=client_config, ativo=True).first()
         if profissional:
             data_hora = encontrar_proximo_horario_disponivel(profissional)
-
             if data_hora:
                 agendamento = Appointment.objects.create(
                     client=client_config,
@@ -64,13 +64,13 @@ def analisar_resposta_e_agendar(reply, phone, client_config):
                     confirmado=True
                 )
                 enviar_mensagem_whatsapp(profissional, pessoa, data_hora, client_config)
-                print(f"✅ Agendamento criado: {data_hora}")
+                print(f"✅ Agendamento criado para {data_hora}")
             else:
                 print("⚠️ Nenhum horário disponível para hoje.")
         else:
             print("⚠️ Nenhum profissional ativo encontrado.")
 
-# 🧠 Função chamada via Function Calling com `submit_tool_outputs`
+# 🧠 Função para Function Calling
 def gessie_agendar_consulta(
     nome: str,
     telefone: str,
@@ -82,28 +82,24 @@ def gessie_agendar_consulta(
     profissional: str,
     client_config,
 ):
+    print("📋 Iniciando agendamento via Function Calling...")
     try:
         pessoa, _ = Person.objects.get_or_create(
             telefone=telefone,
-            defaults={
-                "nome": nome,
-                "client": client_config,
-                "grau_interesse": "médio"
-            }
+            defaults={"nome": nome, "client": client_config, "grau_interesse": "médio"}
         )
 
-        # Regras de plano e redirecionamento
         tipo = tipo_atendimento.lower()
         plano = plano_saude.lower()
         planos_que_exigem = obter_regra(client_config, "encaminhamento_obrigatorio_planos", [])
 
         if plano != "particular" and plano in planos_que_exigem:
-            registrar_mensagem(telefone, "⚠️ Encaminhamento e carteirinha obrigatórios para este plano.", "gessie", client_config)
+            registrar_mensagem(telefone, "⚠️ Encaminhamento médico e carteirinha obrigatórios para este plano.", "gessie", client_config)
 
         if "neuro" in tipo and obter_regra(client_config, "avaliacao_neuro_redirecionar", False):
             texto = (
                 "🧠 Para esse tipo de atendimento via plano, preciso te encaminhar para uma de nossas atendentes. "
-                "Em breve entraremos em contato com mais informações, tudo bem?"
+                "Entraremos em contato em breve!"
             )
             registrar_mensagem(telefone, texto, "gessie", client_config)
             return {"status": "encaminhado", "mensagem": texto}
@@ -114,10 +110,7 @@ def gessie_agendar_consulta(
             "noite": ["17:00", "18:00", "19:00"]
         }
 
-        horarios_desejados = horarios_turno.get(
-            turno_preferido.lower(),
-            ["09:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00"]
-        )
+        horarios_desejados = horarios_turno.get(turno_preferido.lower(), ["09:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00"])
 
         try:
             data_obj = datetime.strptime(data_preferida, "%Y-%m-%d").date()
@@ -142,7 +135,7 @@ def gessie_agendar_consulta(
 
         for h in horarios_desejados:
             dt = datetime.combine(data_obj, datetime.strptime(h, "%H:%M").time())
-            if dt.replace(second=0, microsecond=0) not in horarios_ocupados and dt > datetime.now():
+            if dt.replace(second=0, microsecond=0) not in horarios_ocupados and dt > timezone_now():
                 agendamento = Appointment.objects.create(
                     client=client_config,
                     person=pessoa,
@@ -153,11 +146,7 @@ def gessie_agendar_consulta(
                 )
                 enviar_mensagem_whatsapp(profissional_obj, pessoa, dt, client_config)
 
-                return {
-                    "status": "Agendado com sucesso",
-                    "data": dt.strftime("%d/%m/%Y %H:%M"),
-                    "profissional": profissional_obj.nome
-                }
+                return {"status": "Agendado com sucesso", "data": dt.strftime("%d/%m/%Y %H:%M"), "profissional": profissional_obj.nome}
 
         return {"erro": f"Nenhum horário disponível para {profissional_obj.nome} nessa data e turno."}
 
@@ -165,12 +154,13 @@ def gessie_agendar_consulta(
         print("❌ Erro ao agendar consulta:", e)
         return {"erro": "Erro interno ao tentar agendar a consulta."}
 
-
+# 📋 Lista agendamentos futuros
 def listar_agendamentos_futuros(pessoa):
+    print("📋 Listando agendamentos futuros...")
     agendamentos = Appointment.objects.filter(
         person=pessoa,
         confirmado=True,
-        data_hora__gte=now()
+        data_hora__gte=timezone_now()
     ).order_by("data_hora")
 
     if not agendamentos.exists():
@@ -182,18 +172,14 @@ def listar_agendamentos_futuros(pessoa):
     ]
     return "📋 *Seus próximos agendamentos:*\n" + "\n".join(linhas)
 
-
+# 🔔 Decide se envia a lista de agendamentos
 def verificar_e_enviar_agendamentos_futuros(resposta, phone, client_config):
     gatilhos = [
-        "quais horários",
-        "tenho marcado",
-        "consultas marcadas",
-        "meus agendamentos",
-        "meus atendimentos",
-        "meus horários",
-        "agendado para mim",
-        "o que tenho agendado"
+        "quais horários", "tenho marcado", "consultas marcadas",
+        "meus agendamentos", "meus atendimentos", "meus horários",
+        "agendado para mim", "o que tenho agendado"
     ]
+    print("🔔 Verificando necessidade de listar agendamentos...")
     if any(g in resposta.lower() for g in gatilhos):
         pessoa = Person.objects.filter(telefone=phone, client=client_config).first()
         if pessoa:
@@ -207,34 +193,36 @@ def verificar_e_enviar_agendamentos_futuros(resposta, phone, client_config):
         return True
     return False
 
-
+# ❌ Cancela agendamento
 def gessie_cancelar_agendamento(nome, telefone, client_config):
+    print("❌ Solicitando cancelamento de agendamento...")
     try:
         pessoa = Person.objects.filter(nome=nome, telefone=telefone, client=client_config).first()
         if not pessoa:
-            return {"erro": "Pessoa não encontrada"}
+            return {"erro": "Pessoa não encontrada."}
 
         proximo = Appointment.objects.filter(
             person=pessoa,
             client=client_config,
             confirmado=True,
-            data_hora__gte=datetime.now()
+            data_hora__gte=timezone_now()
         ).order_by("data_hora").first()
 
         if not proximo:
-            return {"erro": "Nenhum agendamento futuro encontrado"}
+            return {"erro": "Nenhum agendamento futuro encontrado."}
 
         horario = proximo.data_hora.strftime("%A, %d/%m às %H:%M")
         profissional = proximo.profissional
 
         proximo.delete()
 
-        enviar_mensagem_whatsapp(pessoa, pessoa, datetime.now(), client_config,
-            texto=f"Seu agendamento para {horario} com {profissional} foi cancelado com sucesso. Se precisar reagendar, é só me avisar!")
+        enviar_mensagem_whatsapp(
+            pessoa, pessoa, timezone_now(), client_config,
+            texto=f"Seu agendamento para {horario} com {profissional} foi cancelado com sucesso. Se precisar reagendar, é só me avisar!"
+        )
 
         return {"status": "cancelado", "mensagem": f"Agendamento cancelado: {horario} com {profissional}"}
 
     except Exception as e:
         print("❌ Erro ao cancelar agendamento:", e)
-        return {"erro": "Erro ao cancelar o agendamento"}
-
+        return {"erro": "Erro ao cancelar o agendamento."}

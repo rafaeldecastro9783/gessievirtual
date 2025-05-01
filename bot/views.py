@@ -2,12 +2,15 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from bot.models import Conversation, ClientConfig, Person, Appointment, Message, ClientUser
 import json, requests, openai, time, os, tempfile, subprocess, base64, threading
-from .gessie_decisoes import analisar_resposta_e_agendar, gessie_agendar_consulta
-from bot.utils import salvar_agendamento, enviar_mensagem_whatsapp, is_professional, listar_compromissos_profissional
-from bot.utils import listar_agendamentos_futuros, registrar_mensagem, obter_regra
-from bot.utils import listar_profissionais as listar_profissionais_detalhado, formatar_lista_profissionais
+from .gessie_decisoes import analisar_resposta_e_agendar
+from bot.utils import registrar_mensagem, obter_regra, verificar_e_enviar_agendamentos_futuros
+from bot.utils import listar_profissionais as listar_profissionais_detalhado, extrair_dia_e_turno_do_texto
 from dotenv import load_dotenv
 from pathlib import Path
+from datetime import datetime
+import locale
+from django.utils.timezone import now
+from bot.models import SilencioTemporario
 from django.conf import settings
 
 openai.api_key = settings.OPENAI_API_KEY
@@ -20,20 +23,6 @@ def listar_profissionais(client_config):
     profissionais = listar_profissionais_detalhado(client_config)
     return [p["nome"] for p in profissionais]
 
-def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"):
-    try:
-        from bot.models import Person  # <- isso resolve seu problema
-        person = Person.objects.filter(telefone=phone, client=client_config).first()
-        Message.objects.create(
-            person=person,
-            client_user=None,
-            enviado_por=enviado_por,
-            mensagem=mensagem,
-            tipo=tipo,
-        )
-    except Exception as e:
-        print("⚠️ Erro ao registrar mensagem:", e)
-
 def process_buffered_message(phone):
     from bot.models import Person, ClientUser, Appointment
     from bot.utils import (
@@ -43,12 +32,14 @@ def process_buffered_message(phone):
         listar_profissionais,
         is_professional,
         listar_compromissos_profissional,
-        verificar_e_enviar_agendamentos_futuros,
         registrar_mensagem,
     )
-    import os, time, tempfile, base64, json, requests
-    from datetime import datetime
-    import locale
+
+    # Verifica se deve silenciar
+    silenciado = SilencioTemporario.objects.filter(phone=phone, ate__gt=now()).exists()
+    if silenciado:
+        print(f"🔕 Gessie está silenciada para {phone}")
+        return
 
     def formatar_data_em_portugues(data_iso):
         locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
@@ -69,17 +60,31 @@ def process_buffered_message(phone):
     last_tool_call = entry.get("last_tool_call")
     if last_tool_call and any(k in combined_message.lower() for k in ["confirm", "sim", "pode agendar", "pode confirmar", "ok", "claro"]):
         if last_tool_call["name"] == "verificar_disponibilidade_consulta":
-            args = last_tool_call["args"]
-            args["data"] = last_tool_call["data_confirmada"]
+            args = last_tool_call["args"].copy()
+            args["data_preferida"] = last_tool_call["data_confirmada"]
+
+            # Corrigir telefone
+            if not args.get("telefone"):
+                args["telefone"] = phone
+
+            # Se não tem turno informado, tenta puxar do texto
+            if not args.get("turno_preferido"):
+                from bot.utils import extrair_dia_e_turno_do_texto
+                data_real, dia_semana, turno = extrair_dia_e_turno_do_texto(combined_message)
+                if turno:
+                    args["turno_preferido"] = turno
+
+            print(f"✅ Args FINAL corrigido para salvar agendamento: {args}")
+
             agendamento = salvar_agendamento(args, client_config, phone)
             if agendamento:
-                enviar_mensagem_whatsapp(usuario=client_config, pessoa=agendamento.person, data_hora=agendamento.data_hora, client_config=client_config)
                 reply = (
                     f"✅ Agendamento confirmado com {agendamento.profissional} para "
                     f"{agendamento.data_hora.strftime('%A, %d/%m às %H:%M')}! Nos vemos na clínica 💙"
                 )
             else:
                 reply = "❌ Ocorreu um erro ao tentar confirmar o agendamento."
+
             registrar_mensagem(phone, reply, "gessie", client_config)
             payload = {"phone": phone, "message": reply}
             requests.post(client_config.zapi_url_text, headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}, json=payload)
@@ -91,15 +96,22 @@ def process_buffered_message(phone):
         active_run = next((r for r in runs.data if r.status in ["queued", "in_progress"]), None)
 
         if active_run:
-            print(f"⚠️ Run ativa detectada ({active_run.id}). Aguardando finalizar...")
-            for _ in range(90):
-                status = openai.beta.threads.runs.retrieve(thread_id=thread_id, run_id=active_run.id).status
-                if status in ["completed", "failed", "cancelled", "expired"]:
-                    break
-                time.sleep(1)
-            else:
-                print("❌ Timeout aguardando run ativa.")
-                return
+            print(f"⚠️ Run ativa detectada ({active_run.id}). Respondendo fallback...")
+            fallback_reply = "⏳ Aguarde um momento enquanto verifico as informações. Já te respondo."
+            registrar_mensagem(phone, fallback_reply, "gessie", client_config)
+            payload = {
+                "phone": phone,
+                "message": fallback_reply
+            }
+            requests.post(
+                client_config.zapi_url_text,
+                headers={
+                    "Content-Type": "application/json",
+                    "Client-Token": client_config.zapi_token
+                },
+                json=payload
+            )
+            return  # ⚡️ Sai do process_buffered_message agora! Não precisa mais esperar!
 
         openai.beta.threads.messages.create(thread_id=thread_id, role="user", content=combined_message)
         run = openai.beta.threads.runs.create(thread_id=thread_id, assistant_id=client_config.assistant_id)
@@ -107,6 +119,7 @@ def process_buffered_message(phone):
         for _ in range(90):
             run_status = openai.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
             if run_status.status in ["completed", "requires_action"]:
+                print('run completa, chamar função')
                 break
             time.sleep(1)
         else:
@@ -124,7 +137,7 @@ def process_buffered_message(phone):
                     result = {}
 
                     tipo = args.get("tipo_atendimento", "").lower()
-                    plano = args.get("plano_ou_particular", "").lower()
+                    plano = args.get("plano_saude", "").lower()
 
                     # APLICAR LÓGICA DE REDIRECIONAMENTO NEURO
                     if "neuro" in tipo and obter_regra(client_config, "avaliacao_neuro_redirecionar", False):
@@ -141,12 +154,15 @@ def process_buffered_message(phone):
                         result = verificar_disponibilidade_consulta(args, client_config)
 
                         if result.get("disponivel"):
+                            # Importa no topo: from bot.utils import extrair_dia_e_turno_do_texto
+                            dia_semana, turno = extrair_dia_e_turno_do_texto(combined_message)
+
                             entry["last_tool_call"] = {
                                 "name": tool_call.function.name,
-                                "args": args,
+                                "args": {**args, "dia": dia_semana, "turno": turno},
                                 "data_confirmada": result["data"]
                             }
-                            message_buffers[phone] = entry
+                            message_buffers[phone] = entry  # ← Atualiza o buffer!
 
                             data_pt = formatar_data_em_portugues(result["data"])
                             reply = (
@@ -154,7 +170,6 @@ def process_buffered_message(phone):
                                 "Posso confirmar o agendamento para você?"
                             )
 
-                            # ENCAMINHAMENTO OBRIGATÓRIO
                             planos_que_exigem = obter_regra(client_config, "encaminhamento_obrigatorio_planos", [])
                             if plano != "particular" and plano in planos_que_exigem:
                                 reply += "\n📎 Para esse plano, será necessário o encaminhamento médico e a carteirinha."
@@ -162,10 +177,23 @@ def process_buffered_message(phone):
                         else:
                             reply = "❌ Infelizmente, não encontrei vaga disponível nesse horário. Podemos tentar outro?"
 
+
+                            # ENCAMINHAMENTO OBRIGATÓRIO
+                            planos_que_exigem = obter_regra(client_config, "encaminhamento_obrigatorio_planos", [])
+                            if plano != "particular" and plano in planos_que_exigem:
+                                reply += "\n📎 Para esse plano, será necessário o encaminhamento médico e a carteirinha."
+
                     elif tool_call.function.name == "gessie_agendar_consulta":
+                        from bot.utils import avisar_profissional
                         agendamento = salvar_agendamento(args, client_config, phone)
                         if agendamento:
                             enviar_mensagem_whatsapp(usuario=client_config, pessoa=agendamento.person, data_hora=agendamento.data_hora, client_config=client_config)
+                            avisar_profissional(
+                                profissional_nome=agendamento.profissional,
+                                data_hora=agendamento.data_hora,
+                                pessoa_nome=agendamento.person.nome,
+                                client_config=client_config
+                            )
                             reply = (
                                 f"✅ Agendamento confirmado com {agendamento.profissional} para "
                                 f"{agendamento.data_hora.strftime('%A, %d/%m às %H:%M')}! Nos vemos na clínica 💙"
@@ -184,6 +212,8 @@ def process_buffered_message(phone):
                             reply = "❌ Não foi possível confirmar o agendamento."
 
                     registrar_mensagem(phone, f"[FUNÇÃO]: {tool_call.function.name}\n{args}", "gessie", client_config)
+                    print(phone, f"[FUNÇÃO]: {tool_call.function.name}\n{args}", "gessie", client_config)
+
                     tool_outputs.append({
                         "tool_call_id": tool_call.id,
                         "output": json.dumps(result)
@@ -193,6 +223,7 @@ def process_buffered_message(phone):
                 for _ in range(30):
                     updated_run = openai.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
                     if updated_run.status == "completed":
+                        print('run completa')
                         break
                     time.sleep(1)
 
@@ -219,6 +250,7 @@ def process_buffered_message(phone):
             reply = listar_compromissos_profissional(profissional, client_config)
 
         registrar_mensagem(phone, reply, "gessie", client_config)
+        print(phone, reply, "gessie", client_config)
 
         if verificar_e_enviar_agendamentos_futuros(reply, phone, client_config):
             return
@@ -240,7 +272,7 @@ def process_buffered_message(phone):
             else:
                 payload = {"phone": phone, "message": reply}
                 requests.post(client_config.zapi_url_text, headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}, json=payload)
-
+    
         except Exception as e:
             print("❌ Erro ao enviar mensagem:", e)
 
@@ -299,7 +331,6 @@ def whatsapp_webhook(request):
                 with open(temp_wav_path, "rb") as audio_file:
                     transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file)
                     message = transcript.text
-                    message = transcript.text
                     registrar_mensagem(sender, message, "person", client_config, tipo="áudio")
                 os.remove(temp_ogg_path)
                 os.remove(temp_wav_path)
@@ -307,20 +338,19 @@ def whatsapp_webhook(request):
                 message = "[Áudio não pôde ser processado]"
         elif "text" in data and "message" in data["text"]:
             message = data["text"]["message"]
-            # ⬇️ Salvar no banco como mensagem da pessoa (person)
             registrar_mensagem(sender, message, "person", client_config)
-
         else:
             return JsonResponse({"status": "ignorado (sem mensagem válida)"})
 
+        # 🔵 Aqui corrigimos a criação de thread sempre que necessário
         thread_obj = Conversation.objects.filter(phone=sender).first()
-        if not thread_obj:
+        if thread_obj and thread_obj.thread_id:
+            thread_id = thread_obj.thread_id
+        else:
+            print(f"⚠️ Nenhuma thread encontrada para {sender}. Criando nova thread.")
             thread = openai.beta.threads.create()
             thread_id = thread.id
-            Conversation.objects.create(phone=sender, thread_id=thread_id)
-            openai.beta.threads.messages.create(thread_id=thread_id, role="user", content=client_config.prompt_personalizado)
-        else:
-            thread_id = thread_obj.thread_id
+            Conversation.objects.update_or_create(phone=sender, defaults={"thread_id": thread_id})
 
         with buffer_lock:
             if sender not in message_buffers:
@@ -334,13 +364,14 @@ def whatsapp_webhook(request):
             message_buffers[sender]["messages"].append(message)
 
             if typing_status.get(sender) != "COMPOSING":
-                if "timer" in message_buffers[sender]:
-                    message_buffers[sender]["timer"].cancel()
-                timer = threading.Timer(5.0, process_buffered_message, args=(sender,))
-                message_buffers[sender]["timer"] = timer
-                timer.start()
+                if not SilencioTemporario.objects.filter(phone=sender, ate__gt=now()).exists():
+                    if "timer" in message_buffers[sender]:
+                        message_buffers[sender]["timer"].cancel()
+                    timer = threading.Timer(5.0, process_buffered_message, args=(sender,))
+                    message_buffers[sender]["timer"] = timer
+                    timer.start()
 
-        return JsonResponse({"status": "mensagem agrupada com sucesso"})
+            return JsonResponse({"status": "mensagem agrupada com sucesso"})
 
     except Exception as e:
         import traceback

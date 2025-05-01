@@ -1,11 +1,11 @@
 # bot/serializers.py
 
 from rest_framework import serializers
-from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade
+from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade, SilencioTemporario
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import ClientUser
-
+from django.utils.timezone import now
 from django.contrib.auth.models import User
 from rest_framework import serializers
 from .models import ClientUser
@@ -94,26 +94,42 @@ class ConversationSerializer(serializers.ModelSerializer):
     person_nome = serializers.SerializerMethodField()
     person_telefone = serializers.SerializerMethodField()
     ultima_mensagem = serializers.SerializerMethodField()
+    gessie_silenciada = serializers.SerializerMethodField() 
     assumido_por_mim = serializers.SerializerMethodField()  # 👈 aqui
 
     class Meta:
         model = Conversation
-        fields = ['id', 'phone', 'created_at', 'person_nome', 'person_telefone', 'ultima_mensagem', 'assumido_por_mim']
+        fields = ['id', 'phone', 'created_at', 'person_nome', 'person_telefone', 'ultima_mensagem', 'gessie_silenciada','assumido_por_mim']
 
     def get_person_nome(self, obj):
-        last = obj.message_set.last()
-        return last.person.nome if last and last.person else obj.phone
+        try:
+            last = obj.message_set.last()
+            return last.person.nome if last and last.person else obj.phone
+        except Exception:
+            return obj.phone
 
     def get_person_telefone(self, obj):
-        last = obj.message_set.last()
-        return last.person.telefone if last and last.person else obj.phone
+        try:
+            last = obj.message_set.last()
+            return last.person.telefone if last and last.person else obj.phone
+        except Exception:
+            return obj.phone
 
     def get_ultima_mensagem(self, obj):
-        last = obj.message_set.last()
-        return last.mensagem if last else None
+        try:
+            last = obj.message_set.last()
+            return last.mensagem if last else None
+        except Exception:
+            return None
 
+    def get_gessie_silenciada(self, obj):
+        return SilencioTemporario.objects.filter(phone=obj.phone, ate__gt=now()).exists()
+        
     def get_assumido_por_mim(self, obj):
-        request = self.context.get("request")
-        if not request or not hasattr(request.user, "clientuser"):
+        try:
+            request = self.context.get('request')
+            user = request.user
+            last_msg = obj.message_set.last()
+            return last_msg and hasattr(user, 'clientuser') and last_msg.client_user == user.clientuser
+        except Exception:
             return False
-        return obj.message_set.filter(client_user=request.user.clientuser).exists()

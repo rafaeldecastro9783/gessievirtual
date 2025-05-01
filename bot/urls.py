@@ -10,8 +10,8 @@ from .api_views import (
 from .api_views import buscar_ou_criar_pessoa, listar_funcionarios
 from .api_views import GessieFunctionCallingView
 from .api_views import MessageListCreateView
-from .api_views import AuditoriaMensagensView  # 👈 novo import
-
+from .api_views import AuditoriaMensagensView # 👈 novo import
+from . import api_views
 
 # Inicializa o router com os endpoints da API
 router = DefaultRouter()
@@ -31,6 +31,7 @@ urlpatterns = [
 
     # CRUDs
     path('', include(router.urls)),
+    path("silenciar-gessie/", api_views.silenciar_gessie, name="silenciar-gessie"),
     path("funcionarios/", listar_funcionarios),
     path("mensagens/", MessageListCreateView.as_view(), name="mensagens"),
     path("buscar_ou_criar_pessoa/", buscar_ou_criar_pessoa),

@@ -159,3 +159,6 @@ class Disponibilidade(models.Model):
     def __str__(self):
         return f"{self.profissional.nome} - {self.dia_semana.capitalize()}"
 
+class SilencioTemporario(models.Model):
+    phone = models.CharField(max_length=20, unique=True)
+    ate = models.DateTimeField()

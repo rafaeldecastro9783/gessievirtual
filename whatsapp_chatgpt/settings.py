@@ -1,3 +1,4 @@
+
 """
 Django settings for whatsapp_chatgpt project.
 
@@ -12,10 +13,12 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 
-CSRF_TRUSTED_ORIGINS = [
-    "https://a76e-177-207-253-149.ngrok-free.app",  # adicione exatamente como no log
-]
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://softdotpro.com",
+    "https://www.softdotpro.com",
+    "https://gessievirtual.softdotpro.com",
+]
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -41,10 +44,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "a76e-177-207-253-149.ngrok-free.app",
-    "http://localhost:5173",
+    "177.207.253.149",            # Seu IP fixo
+    "softdotpro.com",             # Seu domínio principal
+    "www.softdotpro.com",         # Versão com www
+    "gessievirtual.softdotpro.com",  # Subdomínio (se for usar)
 ]
 
 
@@ -70,8 +73,10 @@ REST_FRAMEWORK = {
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
     )
-   
 }
 from datetime import timedelta
 
@@ -80,6 +85,7 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
 
@@ -169,5 +175,31 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
+    "http://gessievirtual.softdotpro.com",
+    "https://gessievirtual.softdotpro.com",
 ]
 
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+USE_X_FORWARDED_HOST = True
+
+STATIC_ROOT = BASE_DIR / "staticfiles"
