@@ -481,26 +481,21 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
         # Garante ou cria Conversation associada ao telefone
         conversation, _ = Conversation.objects.get_or_create(phone=phone)
 
-        # Identifica ClientUser apenas se for mensagem do usuário do sistema
-        client_user = None
-        if enviado_por in ["gessie", "usuario"]:
-            client_user = ClientUser.objects.filter(client=client_config).first()
+        # Se for mensagem do próprio número, usar "usuario" como enviado_por
+        if enviado_por == "usuario" and phone == client_config.telefone:
+            enviado_por = "usuario"  # Mantém consistência
 
-        # Define quem está enviando (Gessie, ou número da pessoa)
-        enviado_por_valor = enviado_por if enviado_por in ["gessie", "usuario"] else phone
-
-        # Cria a mensagem no banco
+        # Salva a mensagem
         Message.objects.create(
             conversation=conversation,
             person=person,
-            client_user=client_user if enviado_por == "usuario" else None,
-            enviado_por=enviado_por_valor,
+            enviado_por=enviado_por,
             mensagem=mensagem,
             tipo=tipo
         )
 
         # Tenta atualizar o nome automaticamente caso seja possível deduzir
-        if enviado_por_valor == phone and person.nome == phone:
+        if enviado_por == "usuario" and person.nome == phone:
             msg_lower = mensagem.lower()
             if msg_lower.startswith("me chamo ") or msg_lower.startswith("sou "):
                 nome_extraido = mensagem.replace("me chamo", "").replace("sou", "").strip().split(" ")[0]

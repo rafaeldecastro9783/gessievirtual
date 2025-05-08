@@ -126,6 +126,32 @@ class ClientConfigViewSet(viewsets.ModelViewSet):
             return ClientConfig.objects.filter(id=self.request.user.clientuser.client.id)
         return ClientConfig.objects.none()
 
+    @action(detail=True, methods=['post'])
+    def alterar_status(self, request, pk=None):
+        """
+        Endpoint para alterar o status do cliente (ativo/desativo)
+        """
+        client_config = self.get_object()
+        novo_status = request.data.get('ativo', False)
+        
+        try:
+            client_config.ativo = novo_status
+            client_config.save()
+            
+            # Registrar a alteração no log
+            print(f"⚙️ Status alterado para {novo_status} pelo usuário {request.user.username}")
+            
+            return Response({
+                'status': 'success',
+                'ativo': client_config.ativo,
+                'mensagem': 'Status atualizado com sucesso'
+            })
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'mensagem': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
 
 class ClientUserViewSet(viewsets.ModelViewSet):
     queryset = ClientUser.objects.all()

@@ -24,7 +24,7 @@ def listar_profissionais(client_config):
     return [p["nome"] for p in profissionais]
 
 def process_buffered_message(phone):
-    from bot.models import Person, ClientUser, Appointment
+    from bot.models import Person, ClientUser, Appointment, ClientConfig
     from bot.utils import (
         salvar_agendamento,
         enviar_mensagem_whatsapp,
@@ -45,6 +45,15 @@ def process_buffered_message(phone):
         locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
         data = datetime.fromisoformat(data_iso)
         return data.strftime("%A, %d de %B às %H:%M")
+
+    # Verificar se o cliente está ativo
+    client_config = ClientConfig.objects.filter(telefone=phone).first()
+    if not client_config or not client_config.ativo:
+        print(f"❌ Cliente {phone} está inativo ou não encontrado. Apenas salvando mensagens.")
+        # Apenas salvar as mensagens sem processar
+        combined_message = " ".join(entry["messages"]).strip()
+        registrar_mensagem(phone, combined_message, "usuario", client_config)
+        return
 
     with buffer_lock:
         entry = message_buffers.pop(phone, None)
@@ -289,6 +298,15 @@ def whatsapp_webhook(request):
         print("📨 Payload recebido:", data)
 
         if data.get("fromMe") or data.get("isGroup"):
+            # Se for mensagem do próprio número, salvar como mensagem do usuário
+            if data.get("fromMe"):
+                phone = data.get("phone")
+                message = data.get("text", {}).get("message")
+                if message:
+                    client_config = ClientConfig.objects.filter(telefone__endswith=phone).first()
+                    if client_config:
+                        registrar_mensagem(phone, message, "usuario", client_config)
+                        return JsonResponse({"status": "mensagem_salva"})
             return JsonResponse({"status": "ignorado"})
 
         if data.get("type") == "PresenceChatCallback":
@@ -315,8 +333,47 @@ def whatsapp_webhook(request):
 
         connected_number = str(data.get("connectedPhone", "")).replace("+", "").strip()
         client_config = ClientConfig.objects.filter(telefone__endswith=connected_number).first()
-        if not client_config:
-            return JsonResponse({"error": "Cliente não configurado"}, status=403)
+        if not client_config or not client_config.ativo:
+            print(f"❌ Cliente {connected_number} está inativo ou não encontrado. Apenas salvando mensagem.")
+            # Apenas salvar a mensagem sem processar
+            if "text" in data and "message" in data["text"]:
+                message = data["text"]["message"]
+                
+                # Atualizar informações do contato via Z-API
+                try:
+                    if "pushName" in data:
+                        nome = data["pushName"]
+                        print(f"📝 Atualizando nome do contato: {nome}")
+                        
+                        # Atualizar nome no banco de dados
+                        person, _ = Person.objects.get_or_create(
+                            telefone=sender,
+                            client=client_config,
+                            defaults={"nome": nome}
+                        )
+                        if person.nome != nome:
+                            person.nome = nome
+                            person.save()
+                            print(f"✅ Nome atualizado para: {nome}")
+
+                    if "profilePicThumbObj" in data:
+                        foto_url = get_contact_photo_url(client_config, sender)
+                        if foto_url:
+                            print(f"🖼️ Atualizando foto do contato")
+                            person, _ = Person.objects.get_or_create(
+                                telefone=sender,
+                                client=client_config,
+                                defaults={"foto_url": foto_url}
+                            )
+                            if person.foto_url != foto_url:
+                                person.foto_url = foto_url
+                                person.save()
+                                print(f"✅ Foto atualizada")
+                except Exception as e:
+                    print(f"⚠️ Erro ao atualizar informações do contato: {str(e)}")
+
+                registrar_mensagem(sender, message, "usuario", client_config)
+                return JsonResponse({"status": "cliente_inativo"})
 
         if "audio" in data:
             is_audio = True

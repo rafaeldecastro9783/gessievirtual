@@ -42,12 +42,35 @@ class DisponibilidadeSerializer(serializers.ModelSerializer):
 class ClientConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClientConfig
-        fields = '__all__'
+        fields = ['id', 'nome', 'cnpj', 'email', 'telefone', 'zapi_url_text', 'zapi_url_audio', 'zapi_token', 'assistant_id', 'prompt_personalizado', 'regras_json', 'ativo']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['status'] = 'ativo' if instance.ativo else 'inativo'
+        return data
 
 class PersonSerializer(serializers.ModelSerializer):
+    foto_url = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Person
-        fields = '__all__'
+        fields = ['id', 'nome', 'foto_url', 'photo_url', 'photo', 'idade', 'telefone', 'cpf', 'grau_interesse', 'responsavel', 'ativo', 'client']
+
+    def get_foto_url(self, obj):
+        return obj.foto_url or 'https://via.placeholder.com/150?text=Sem+foto'
+
+    def get_photo_url(self, obj):
+        if obj.photo:
+            return obj.photo.url
+        return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Se não houver foto, retorna URL padrão
+        if not data['foto_url'] and not data['photo_url']:
+            data['foto_url'] = 'https://via.placeholder.com/150?text=Sem+foto'
+        return data
 
 # bot/serializers.py
 
@@ -63,12 +86,22 @@ class AppointmentSerializer(serializers.ModelSerializer):
 # serializers.py
 class MessageSerializer(serializers.ModelSerializer):
     client_user_nome = serializers.SerializerMethodField()
+
     class Meta:
         model = Message
-        fields = ['id', 'conversation', 'person', 'mensagem', 'tipo', 'enviado_por', 'client_user', 'client_user_nome', 'data']
+        fields = ['id', 'conversation', 'person', 'client_user', 'enviado_por', 'mensagem', 'tipo', 'data', 'foto_remetente', 'client_user_nome']
         extra_kwargs = {
             'person': {'required': False, 'allow_null': True}
         }
+
+    def get_foto_remetente(self, obj):
+        if obj.client_user:
+            return obj.client_user.foto_url
+        elif obj.person:
+            return obj.person.foto_url
+        else:
+            return None
+
     def get_client_user_nome(self, obj):
         return obj.client_user.nome if obj.client_user else None
 

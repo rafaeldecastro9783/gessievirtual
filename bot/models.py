@@ -1,9 +1,13 @@
 from django.db import models
 from django.contrib.auth.models import User
-from django.utils.timezone import now
-from django.db.models import JSONField
+from django.core.validators import RegexValidator
+from django.utils import timezone
+from django.core.files.storage import FileSystemStorage
+from django.conf import settings
+import os
 
-
+# Configuração para armazenamento de fotos
+fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'fotos'))
 
 # 🔁 Threads de conversa com o assistente da OpenAI
 class Conversation(models.Model):
@@ -57,39 +61,72 @@ class Especialidade(models.Model):
         return self.nome
 
 class ClientUser(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE)  # <- VÍNCULO AQUI
+    user = models.OneToOneField(User, on_delete=models.CASCADE)  
     client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE)
     nome = models.CharField(max_length=255)
     email = models.EmailField()
     telefone = models.CharField(max_length=20)
-    senha = models.CharField(max_length=255)  # considere usar user.set_password()
+    senha = models.CharField(max_length=255)  
+    foto_url = models.URLField(blank=True, null=True)
     ativo = models.BooleanField(default=True)
-    especialidades = models.ManyToManyField(Especialidade, blank=True)  # <-- relação N:N
+    especialidades = models.ManyToManyField(Especialidade, blank=True)  
 
 
     def __str__(self):
         return f"{self.nome} ({self.client.nome})"
 
 
-
 # 📇 Pessoas que interagem com a Gessie (clientes, leads, pacientes)
 class Person(models.Model):
-    client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE)
-    nome = models.CharField(max_length=255)
-    idade = models.CharField(max_length=255)
-    telefone = models.CharField(max_length=20)
-    cpf = models.CharField(max_length=14, blank=True, null=True)
+    client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE, related_name='pessoas')
+    nome = models.CharField(max_length=255, blank=True, null=True)
+    foto_url = models.URLField(blank=True, null=True)
+    photo = models.ImageField(
+        upload_to='fotos/%Y/%m/%d/',
+        storage=fs,
+        blank=True,
+        null=True,
+        help_text='Foto local do contato'
+    )
+    idade = models.CharField(max_length=3, blank=True, null=True)  
+    telefone = models.CharField(max_length=20, unique=True)
+    cpf = models.CharField(max_length=14, blank=True, null=True, validators=[
+        RegexValidator(
+            regex='^[0-9]{11}$',
+            message='CPF deve conter 11 dígitos numéricos',
+            code='invalid_cpf'
+        )
+    ])
     grau_interesse = models.CharField(
-    max_length=50,
-    choices=[('baixo', 'Baixo'), ('médio', 'Médio'), ('alto', 'Alto')],
-    blank=True,
-    null=True
-)
-    responsavel = models.ForeignKey(ClientUser, on_delete=models.SET_NULL, null=True, blank=True)
+        max_length=50,
+        choices=[('baixo', 'Baixo'), ('médio', 'Médio'), ('alto', 'Alto')],
+        blank=True,
+        null=True
+    )
+    responsavel = models.ForeignKey(
+        ClientUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pessoas_responsaveis'
+    )
     ativo = models.BooleanField(default=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Pessoa'
+        verbose_name_plural = 'Pessoas'
+        ordering = ['-ativo', 'nome']
 
     def __str__(self):
-        return self.nome
+        return self.nome or self.telefone
+
+    def save(self, *args, **kwargs):
+        # Se não tiver nome, usar o telefone
+        if not self.nome:
+            self.nome = self.telefone
+        super().save(*args, **kwargs)
 
 
 # 💬 Mensagens trocadas entre Gessie, usuário e cliente
@@ -106,6 +143,14 @@ class Message(models.Model):
         if self.person:
             return f"{self.person.nome} ({self.enviado_por}) - {self.data.strftime('%d/%m/%Y %H:%M')}"
         return f"{self.enviado_por} - {self.data.strftime('%d/%m/%Y %H:%M')}"
+
+    @property
+    def foto_remetente(self):
+        if self.person and hasattr(self.person, 'foto_url'):
+            return self.person.foto_url
+        elif self.client_user and hasattr(self.client_user, 'foto_url'):
+            return self.client_user.foto_url
+        return 'https://via.placeholder.com/150?text=Sem+foto'
 
 
 # 📆 Agendamentos de sessões ou atendimentos
