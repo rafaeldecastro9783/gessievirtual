@@ -1,62 +1,47 @@
 import os
 import django
 
-# Inicializa o ambiente Django
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'whatsapp_chatgpt.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "whatsapp_chatgpt.settings")
 django.setup()
 
-from bot.models import Message, Person, Conversation, ClientUser
+from django.core.management.base import BaseCommand
+from bot.models import Message, ClientConfig, ClientUser
 from django.contrib.auth.models import User
-from django.utils.timezone import now
 
-print("🔍 Iniciando verificação de mensagens órfãs...")
+class Command(BaseCommand):
+    help = "Corrige mensagens do tipo 'usuario' sem ClientUser associado"
 
-# Pega um client_user como referência (pode ser ajustado para o desejado)
-user = User.objects.first()
-if not hasattr(user, 'clientuser'):
-    print("⚠️ Este usuário não está vinculado a um ClientUser.")
-else:
-    client_user = user.clientuser
-    client = client_user.client
+    def handle(self, *args, **options):
+        corrigidas = 0
 
-    msgs_corrigidas = 0
+        for config in ClientConfig.objects.all():
+            telefone = config.telefone
 
-    for msg in Message.objects.filter(conversation__isnull=True):
-        telefone = None
+            client_user = ClientUser.objects.filter(telefone=telefone, client=config).first()
+            if not client_user:
+                self.stdout.write(f"🔧 Criando ClientUser Sistema para {telefone}")
+                user = User.objects.create_user(
+                    username=f"sistema_{config.id}",
+                    password="senha_segura123",
+                    first_name="Sistema"
+                )
+                client_user = ClientUser.objects.create(
+                    user=user,
+                    client=config,
+                    nome="Sistema",
+                    telefone=telefone,
+                    email=f"sistema_{config.id}@softdotpro.com",
+                )
 
-        # Tenta extrair telefone a partir da pessoa vinculada
-        if msg.person:
-            telefone = msg.person.telefone
-        elif "mensagem" in msg.mensagem:
-            # Extração alternativa, se necessário
-            telefone = msg.mensagem.split()[0]  # só um fallback básico
+            mensagens = Message.objects.filter(
+                enviado_por="usuario",
+                client_user__isnull=True,
+                person__client=config
+            )
 
-        if not telefone:
-            print(f"⛔ Mensagem {msg.id} sem telefone detectável.")
-            continue
+            for msg in mensagens:
+                msg.client_user = client_user
+                msg.save()
+                corrigidas += 1
 
-        # Recupera ou cria Person
-        person, _ = Person.objects.get_or_create(
-            telefone=telefone,
-            client=client,
-            defaults={"nome": telefone, "idade": "0"}
-        )
-
-        # Recupera ou cria Conversation
-        conversation, _ = Conversation.objects.get_or_create(
-            phone=telefone,
-            defaults={"thread_id": ""}
-        )
-
-        # Atribuições
-        msg.person = person
-        msg.conversation = conversation
-
-        if msg.enviado_por == "usuario":
-            msg.client_user = client_user
-
-        msg.save()
-        msgs_corrigidas += 1
-
-    print(f"✅ Correção finalizada: {msgs_corrigidas} mensagens atualizadas.")
-
+        self.stdout.write(self.style.SUCCESS(f"✅ Mensagens corrigidas: {corrigidas}"))

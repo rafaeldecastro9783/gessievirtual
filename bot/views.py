@@ -289,6 +289,30 @@ def process_buffered_message(phone):
         print("❌ Erro geral na process_buffered_message:", e)
 
 @csrf_exempt
+def identificar_autor(data):
+    """
+    Identifica quem enviou a mensagem:
+    - "usuario" → se for o número conectado (fromMe)
+    - "pessoa" → se for uma pessoa externa
+    """
+    if data.get("fromMe"):
+        return "usuario"
+
+    if data.get("isGroup"):
+        participant = data.get("participantPhone")
+        connected = data.get("connectedPhone")
+        if participant and connected:
+            # Verifica se a mensagem veio do próprio número no grupo
+            if participant.endswith(connected):
+                return "usuario"
+            else:
+                return "pessoa"
+        else:
+            return "pessoa"
+
+    return "pessoa"
+
+@csrf_exempt
 def whatsapp_webhook(request):
     if request.method != "POST":
         return JsonResponse({"error": "Método não permitido"}, status=405)
@@ -297,22 +321,17 @@ def whatsapp_webhook(request):
         data = json.loads(request.body)
         print("📨 Payload recebido:", data)
 
-        if data.get("fromMe") or data.get("isGroup"):
-            # Se for mensagem do próprio número, salvar como mensagem do usuário
-            if data.get("fromMe"):
-                phone = data.get("phone")
-                message = data.get("text", {}).get("message")
-                if message:
-                    client_config = ClientConfig.objects.filter(telefone__endswith=phone).first()
-                    if client_config:
-                        registrar_mensagem(phone, message, "usuario", client_config)
-                        return JsonResponse({"status": "mensagem_salva"})
-            return JsonResponse({"status": "ignorado"})
+        connected_number = str(data.get("connectedPhone", "")).replace("+", "").strip()
+        connected_number = ''.join(filter(str.isdigit, connected_number))
+        client_config = ClientConfig.objects.filter(telefone__endswith=connected_number).first()
+
+        if not client_config:
+            print(f"❌ Nenhum ClientConfig encontrado para o número conectado: {connected_number}")
+            return JsonResponse({"error": "ClientConfig não encontrado"}, status=400)
 
         if data.get("type") == "PresenceChatCallback":
             phone = data.get("phone")
             status = data.get("status")
-
             with buffer_lock:
                 typing_status[phone] = status
                 if status in ["PAUSED", "AVAILABLE"] and phone in message_buffers:
@@ -326,56 +345,37 @@ def whatsapp_webhook(request):
 
         sender = data.get("phone")
         message_type = data.get("type")
+        is_group = data.get("isGroup", False)
         is_audio = False
 
         if message_type != "ReceivedCallback" or not sender:
             return JsonResponse({"status": "ignorado"})
 
-        connected_number = str(data.get("connectedPhone", "")).replace("+", "").strip()
-        client_config = ClientConfig.objects.filter(telefone__endswith=connected_number).first()
-        if not client_config or not client_config.ativo:
-            print(f"❌ Cliente {connected_number} está inativo ou não encontrado. Apenas salvando mensagem.")
-            # Apenas salvar a mensagem sem processar
-            if "text" in data and "message" in data["text"]:
-                message = data["text"]["message"]
-                
-                # Atualizar informações do contato via Z-API
-                try:
-                    if "pushName" in data:
-                        nome = data["pushName"]
-                        print(f"📝 Atualizando nome do contato: {nome}")
-                        
-                        # Atualizar nome no banco de dados
-                        person, _ = Person.objects.get_or_create(
-                            telefone=sender,
-                            client=client_config,
-                            defaults={"nome": nome}
-                        )
-                        if person.nome != nome:
-                            person.nome = nome
-                            person.save()
-                            print(f"✅ Nome atualizado para: {nome}")
+        # 👤 FROM ME (do próprio número conectado)
+        if data.get("fromMe"):
+            phone = data.get("phone")
+            message = data.get("text", {}).get("message")
+            if message:
+                registrar_mensagem(phone, message, "usuario", client_config)
+                return JsonResponse({"status": "mensagem_salva fromMe"})
+            return JsonResponse({"status": "ignorado fromMe"})
 
-                    if "profilePicThumbObj" in data:
-                        foto_url = get_contact_photo_url(client_config, sender)
-                        if foto_url:
-                            print(f"🖼️ Atualizando foto do contato")
-                            person, _ = Person.objects.get_or_create(
-                                telefone=sender,
-                                client=client_config,
-                                defaults={"foto_url": foto_url}
-                            )
-                            if person.foto_url != foto_url:
-                                person.foto_url = foto_url
-                                person.save()
-                                print(f"✅ Foto atualizada")
-                except Exception as e:
-                    print(f"⚠️ Erro ao atualizar informações do contato: {str(e)}")
+        # 🎯 Trata mensagens de grupo
+        if is_group:
+            message = data.get("text", {}).get("message", "")
+            participant = data.get("participantPhone")
 
-                registrar_mensagem(sender, message, "usuario", client_config)
-                return JsonResponse({"status": "cliente_inativo"})
+            # Só responder se Gessie for mencionada
+            if "@gessie" not in message.lower():
+                print("👥 Mensagem de grupo ignorada (Gessie não foi mencionada)")
+                return JsonResponse({"status": "grupo_ignorado"})
 
-        if "audio" in data:
+            autor = participant or sender
+            registrar_mensagem(sender, message, "pessoa", client_config)
+            # Obs: você pode adaptar para salvar o nome do participante também
+
+        # 🎧 Áudio
+        elif "audio" in data:
             is_audio = True
             audio_url = data["audio"].get("audioUrl")
             if audio_url:
@@ -388,23 +388,30 @@ def whatsapp_webhook(request):
                 with open(temp_wav_path, "rb") as audio_file:
                     transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file)
                     message = transcript.text
-                    registrar_mensagem(sender, message, "person", client_config, tipo="áudio")
+                    registrar_mensagem(sender, message, "pessoa", client_config, tipo="áudio")
                 os.remove(temp_ogg_path)
                 os.remove(temp_wav_path)
             else:
                 message = "[Áudio não pôde ser processado]"
+
+        # ✉️ Texto simples
         elif "text" in data and "message" in data["text"]:
             message = data["text"]["message"]
-            registrar_mensagem(sender, message, "person", client_config)
+            registrar_mensagem(sender, message, "pessoa", client_config)
+
         else:
             return JsonResponse({"status": "ignorado (sem mensagem válida)"})
 
-        # 🔵 Aqui corrigimos a criação de thread sempre que necessário
+        # ⚠️ Se o client_config estiver inativo, não prosseguir com execuções
+        if not client_config.ativo:
+            print(f"🚫 Cliente {connected_number} está inativo. Não será iniciado run.")
+            return JsonResponse({"status": "mensagem salva sem run"})
+
+        # 🧠 Criação de thread e buffer
         thread_obj = Conversation.objects.filter(phone=sender).first()
         if thread_obj and thread_obj.thread_id:
             thread_id = thread_obj.thread_id
         else:
-            print(f"⚠️ Nenhuma thread encontrada para {sender}. Criando nova thread.")
             thread = openai.beta.threads.create()
             thread_id = thread.id
             Conversation.objects.update_or_create(phone=sender, defaults={"thread_id": thread_id})
@@ -428,7 +435,7 @@ def whatsapp_webhook(request):
                     message_buffers[sender]["timer"] = timer
                     timer.start()
 
-            return JsonResponse({"status": "mensagem agrupada com sucesso"})
+        return JsonResponse({"status": "mensagem agrupada com sucesso"})
 
     except Exception as e:
         import traceback

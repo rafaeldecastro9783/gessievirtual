@@ -11,15 +11,6 @@ import os
 # Configuração para armazenamento de fotos
 fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'fotos'))
 
-# 🔁 Threads de conversa com o assistente da OpenAI
-class Conversation(models.Model):
-    phone = models.CharField(max_length=20)
-    thread_id = models.CharField(max_length=100)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.phone} - {self.thread_id}"
-
 
 # 🕒 Mensagens recebidas aguardando agrupamento ou processamento
 class PendingMessage(models.Model):
@@ -55,6 +46,15 @@ class ClientConfig(models.Model):
     def __str__(self):
         return self.nome
 
+# 🔁 Threads de conversa com o assistente da OpenAI
+class Conversation(models.Model):
+    phone = models.CharField(max_length=20)
+    thread_id = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f"{self.phone} - {self.thread_id}"
 
 class Especialidade(models.Model):
     nome = models.CharField(max_length=100, unique=True)

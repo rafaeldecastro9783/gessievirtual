@@ -22,6 +22,7 @@ from .gessie_decisoes import gessie_agendar_consulta
 from django.utils.timezone import now
 from datetime import timedelta
 from bot.models import SilencioTemporario
+from django.db.models import Max
 
 
 
@@ -76,26 +77,27 @@ class MessageListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         conversation_id = self.request.query_params.get("conversation")
-        user = self.request.user
-        if conversation_id and hasattr(user, 'clientuser'):
-            return Message.objects.filter(
-                conversation_id=conversation_id,
-                person__client=user.clientuser.client
-            ).order_by("data")
+        if conversation_id:
+            return Message.objects.filter(conversation_id=conversation_id).order_by("data")
         return Message.objects.none()
 
     def perform_create(self, serializer):
         conversation_id = self.request.data.get("conversation")
         conversation = get_object_or_404(Conversation, id=conversation_id)
-        last_msg = Message.objects.filter(conversation=conversation).last()
-        person = last_msg.person if last_msg else None
+
+        # Busca o person com base nas mensagens anteriores da conversa
+        person = Message.objects.filter(
+            conversation=conversation,
+            person__isnull=False
+        ).order_by("-data").first()
+        person = person.person if person else None
 
         client_user = None
         if hasattr(self.request.user, "clientuser"):
             client_user = self.request.user.clientuser
             client_config = client_user.client
 
-            # Enviar mensagem via Z-API
+            # Enviar via Z-API
             try:
                 payload = {
                     "phone": conversation.phone,
@@ -115,7 +117,6 @@ class MessageListCreateView(generics.ListCreateAPIView):
             conversation=conversation,
             enviado_por="usuario"
         )
-
 
 class ClientConfigViewSet(viewsets.ModelViewSet):
     serializer_class = ClientConfigSerializer
@@ -224,6 +225,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 enviar_mensagem_whatsapp(client_user, appointment.person, appointment.data_hora)
 
 
+
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated]
@@ -237,7 +239,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 print("🔎 Cliente associado:", client)
                 return Conversation.objects.filter(
                     message__person__client=client
-                ).distinct().order_by('-created_at')
+                ).annotate(
+                    ultima_mensagem=Max("message__data")
+                ).order_by("-ultima_mensagem")
             return Conversation.objects.none()
         except Exception as e:
             print("❌ Erro em get_queryset do ConversationViewSet:", str(e))

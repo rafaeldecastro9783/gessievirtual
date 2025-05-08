@@ -466,24 +466,66 @@ def formatar_lista_profissionais(profissionais):
         linhas.append(f"{i}. {p['nome']} – {especialidades}")
     return "\n".join(linhas)
 
-
 def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"):
-    from bot.models import Person, Conversation, ClientUser, Message
-    print('Entrou na função registar_mensagem')
+    from bot.models import Person, Conversation, ClientUser, Message, User
+    from django.utils.timezone import now
+
+    print('📥 Entrou na função registrar_mensagem')
+
     try:
-        # Garante ou cria Person com base no telefone
-        person, _ = Person.objects.get_or_create(
-            telefone=phone,
-            client=client_config,
-            defaults={"nome": phone, "idade": "0"}
-        )
+        client_user = None
 
-        # Garante ou cria Conversation associada ao telefone
-        conversation, _ = Conversation.objects.get_or_create(phone=phone)
-
-        # Se for mensagem do próprio número, usar "usuario" como enviado_por
         if enviado_por == "usuario" and phone == client_config.telefone:
-            enviado_por = "usuario"  # Mantém consistência
+            print("📨 Mensagem enviada pelo número conectado (fromMe)")
+
+            # Busca a última conversa do cliente para saber o destinatário
+            last_conversa = Conversation.objects.filter(client=client_config).order_by('-updated_at').first()
+            if not last_conversa:
+                print("⚠️ Nenhuma conversa encontrada para enviar a mensagem do sistema")
+                return
+
+            phone_destino = last_conversa.phone
+
+            # Garante Person e Conversation do destinatário
+            person, _ = Person.objects.get_or_create(
+                telefone=phone_destino,
+                client=client_config,
+                defaults={"nome": phone_destino, "idade": "0"}
+            )
+            conversation, _ = Conversation.objects.get_or_create(
+                phone=phone_destino,
+                client=client_config,
+                defaults={"person": person}
+            )
+
+            # Garante ClientUser do número conectado
+            client_user = ClientUser.objects.filter(telefone=phone, client=client_config).first()
+            if not client_user:
+                user = User.objects.create_user(
+                    username=f"sistema_{client_config.id}",
+                    password="senha_segura123",
+                    first_name="Sistema"
+                )
+                client_user = ClientUser.objects.create(
+                    user=user,
+                    client=client_config,
+                    nome="Sistema",
+                    telefone=phone,
+                    email=f"sistema_{client_config.id}@softdotpro.com"
+                )
+
+        else:
+            # Mensagem recebida de uma pessoa externa
+            person, _ = Person.objects.get_or_create(
+                telefone=phone,
+                client=client_config,
+                defaults={"nome": phone, "idade": "0"}
+            )
+            conversation, _ = Conversation.objects.get_or_create(
+                phone=phone,
+                client=client_config,
+                defaults={"person": person}
+            )
 
         # Salva a mensagem
         Message.objects.create(
@@ -491,11 +533,13 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
             person=person,
             enviado_por=enviado_por,
             mensagem=mensagem,
-            tipo=tipo
+            client_user=client_user,
+            tipo=tipo,
+            data=now()
         )
 
-        # Tenta atualizar o nome automaticamente caso seja possível deduzir
-        if enviado_por == "usuario" and person.nome == phone:
+        # Atualiza nome da pessoa se for identificável no conteúdo
+        if enviado_por == "pessoa" and person.nome == person.telefone:
             msg_lower = mensagem.lower()
             if msg_lower.startswith("me chamo ") or msg_lower.startswith("sou "):
                 nome_extraido = mensagem.replace("me chamo", "").replace("sou", "").strip().split(" ")[0]
@@ -505,7 +549,6 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
 
     except Exception as e:
         print("⚠️ Erro ao registrar mensagem:", e)
-
 
 def listar_agendamentos_futuros(person):
     print('Listando agendamentos futuros...')
