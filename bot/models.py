@@ -1,7 +1,9 @@
 from django.db import models
+from django.db.models import JSONField
 from django.contrib.auth.models import User
 from django.core.validators import RegexValidator
 from django.utils import timezone
+from django.utils.timezone import now
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 import os
