@@ -365,14 +365,14 @@ def whatsapp_webhook(request):
             message = data.get("text", {}).get("message", "")
             participant = data.get("participantPhone")
 
-            # Só responder se Gessie for mencionada
-            if "@gessie" not in message.lower():
-                print("👥 Mensagem de grupo ignorada (Gessie não foi mencionada)")
-                return JsonResponse({"status": "grupo_ignorado"})
-
             autor = participant or sender
             registrar_mensagem(sender, message, "pessoa", client_config)
-            # Obs: você pode adaptar para salvar o nome do participante também
+
+            if "@gessie" not in message.lower():
+                print("👥 Mensagem de grupo salva, mas Gessie não foi mencionada")
+                return JsonResponse({"status": "grupo_salvo_sem_mencao"})
+
+            print("👥 Gessie foi mencionada, seguindo com processamento")
 
         # 🎧 Áudio
         elif "audio" in data:

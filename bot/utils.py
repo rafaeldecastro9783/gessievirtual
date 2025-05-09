@@ -494,8 +494,7 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
             )
             conversation, _ = Conversation.objects.get_or_create(
                 phone=phone_destino,
-                client=client_config,
-                defaults={"person": person}
+                client=client_config
             )
 
             # Garante ClientUser do número conectado
@@ -523,8 +522,7 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
             )
             conversation, _ = Conversation.objects.get_or_create(
                 phone=phone,
-                client=client_config,
-                defaults={"person": person}
+                client=client_config
             )
 
         # Salva a mensagem

@@ -23,7 +23,7 @@ from django.utils.timezone import now
 from datetime import timedelta
 from bot.models import SilencioTemporario
 from django.db.models import Max
-
+import requests
 
 
 @api_view(["GET"])
@@ -205,6 +205,10 @@ class PersonViewSet(viewsets.ModelViewSet):
             client_user = self.request.user.clientuser
             serializer.save(client=client_user.client, responsavel=client_user)
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
 
 
 class AppointmentViewSet(viewsets.ModelViewSet):
@@ -337,3 +341,69 @@ def silenciar_gessie(request):
     SilencioTemporario.objects.update_or_create(phone=phone, defaults={"ate": ate})
 
     return Response({"mensagem": f"Gessie silenciada até {ate}."})
+
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from bot.models import Person
+import requests
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def importar_contatos(request):
+    client_user = request.user.clientuser
+    client_config = client_user.client
+    token = client_config.zapi_token
+
+    url_contatos = f"https://api.z-api.io/instances/3DFCEFFC436AD08545800A1EFCACDE10/token/3ADBF95CB1315102507AB92B/contacts?page=1&pageSize=200"
+    url_foto = f"https://api.z-api.io/instances/3DFCEFFC436AD08545800A1EFCACDE10/token/3ADBF95CB1315102507AB92B/profile-picture"
+    headers = {
+        "Client-Token": token
+    }
+
+    try:
+        response = requests.get(url_contatos, headers=headers)
+        if response.status_code != 200:
+            return Response({
+                "erro": "Erro ao buscar contatos da Z-API",
+                "status_code": response.status_code,
+                "detalhes": response.text
+            }, status=response.status_code)
+
+        contatos = response.json()
+        total_importados = 0
+
+        for contato in contatos:
+            telefone = contato.get("phone")
+            nome = contato.get("name") or contato.get("short") or contato.get("notify") or telefone
+
+            if not telefone:
+                continue
+
+            # Buscar foto de perfil atualizada
+            try:
+                foto_response = requests.get(f"{url_foto}?phone={telefone}", headers=headers)
+                foto_url = None
+                if foto_response.status_code == 200:
+                    foto_data = foto_response.json()
+                    if isinstance(foto_data, dict) and "link" in foto_data:
+                        foto_url = foto_data["link"]
+                    elif isinstance(foto_data, list) and foto_data and "link" in foto_data[0]:
+                        foto_url = foto_data[0]["link"]
+            except Exception as e:
+                print(f"⚠️ Erro ao buscar foto do contato {telefone}: {e}")
+                foto_url = None
+
+            Person.objects.update_or_create(
+                telefone=telefone,
+                client=client_config,
+                defaults={"nome": nome, "foto_url": foto_url}
+            )
+            total_importados += 1
+
+        return Response({"status": "contatos importados com sucesso", "total": total_importados})
+
+    except Exception as e:
+        return Response({"erro": str(e)}, status=500)

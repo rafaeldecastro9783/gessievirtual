@@ -203,3 +203,6 @@ CORS_ALLOW_METHODS = [
 USE_X_FORWARDED_HOST = True
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'

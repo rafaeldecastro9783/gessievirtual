@@ -7,7 +7,7 @@ from rest_framework_simplejwt.views import (
 from .api_views import (
     ClientConfigViewSet, ClientUserViewSet, PersonViewSet,
     AppointmentViewSet, ConversationViewSet)
-from .api_views import buscar_ou_criar_pessoa, listar_funcionarios
+from .api_views import buscar_ou_criar_pessoa, listar_funcionarios, importar_contatos
 from .api_views import GessieFunctionCallingView
 from .api_views import MessageListCreateView
 from .api_views import AuditoriaMensagensView # 👈 novo import
@@ -37,6 +37,7 @@ urlpatterns = [
     path("buscar_ou_criar_pessoa/", buscar_ou_criar_pessoa),
     path("auditoria/mensagens/", AuditoriaMensagensView.as_view(), name="auditoria-mensagens"),
     path("gessie/function-calling/", GessieFunctionCallingView.as_view(), name="gessie_function_calling"),
+    path("importar-contatos/", importar_contatos, name="importar-contatos"),
 
 ]
 

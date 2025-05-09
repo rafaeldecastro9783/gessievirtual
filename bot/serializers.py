@@ -55,24 +55,20 @@ class PersonSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Person
-        fields = ['id', 'nome', 'foto_url', 'photo_url', 'photo', 'idade', 'telefone', 'cpf', 'grau_interesse', 'responsavel', 'ativo', 'client']
+        fields = [
+            'id', 'nome', 'foto_url', 'photo_url', 'photo', 'idade', 
+            'telefone', 'cpf', 'grau_interesse', 'responsavel', 'ativo', 'client'
+        ]
 
     def get_foto_url(self, obj):
         return obj.foto_url or 'https://via.placeholder.com/150?text=Sem+foto'
-
+   
     def get_photo_url(self, obj):
-        if obj.photo:
-            return obj.photo.url
+        request = self.context.get('request')
+        if obj.photo and request:
+            return request.build_absolute_uri(obj.photo.url)
         return None
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        # Se não houver foto, retorna URL padrão
-        if not data['foto_url'] and not data['photo_url']:
-            data['foto_url'] = 'https://via.placeholder.com/150?text=Sem+foto'
-        return data
-
-# bot/serializers.py
 
 class AppointmentSerializer(serializers.ModelSerializer):
     person_nome = serializers.CharField(source="person.nome", read_only=True)
