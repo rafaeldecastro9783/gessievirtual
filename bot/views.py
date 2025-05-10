@@ -46,25 +46,22 @@ def process_buffered_message(phone):
         data = datetime.fromisoformat(data_iso)
         return data.strftime("%A, %d de %B às %H:%M")
 
-    # Verificar se o cliente está ativo
-    client_config = ClientConfig.objects.filter(telefone=phone).first()
-    if not client_config or not client_config.ativo:
-        print(f"❌ Cliente {phone} está inativo ou não encontrado. Apenas salvando mensagens.")
-        # Apenas salvar as mensagens sem processar
-        combined_message = " ".join(entry["messages"]).strip()
-        registrar_mensagem(phone, combined_message, "usuario", client_config)
-        return
-
     with buffer_lock:
         entry = message_buffers.pop(phone, None)
 
     if not entry:
         return
+    # Verificar se o cliente está ativo
+    client_config = entry.get("client_config")
+    if not client_config or not client_config.ativo:
+        print(f"❌ Cliente conectado está inativo ou não encontrado. Apenas salvando mensagens.")
+        combined_message = " ".join(entry["messages"]).strip()
+        registrar_mensagem(phone, combined_message, "usuario", client_config)
+        return
 
     thread_id = entry["thread_id"]
     is_audio = entry["is_audio"]
     combined_message = " ".join(entry["messages"]).strip()
-    client_config = entry["client_config"]
 
     last_tool_call = entry.get("last_tool_call")
     if last_tool_call and any(k in combined_message.lower() for k in ["confirm", "sim", "pode agendar", "pode confirmar", "ok", "claro"]):
@@ -321,6 +318,7 @@ def whatsapp_webhook(request):
         data = json.loads(request.body)
         print("📨 Payload recebido:", data)
 
+        # Extrai e normaliza o número conectado
         connected_number = str(data.get("connectedPhone", "")).replace("+", "").strip()
         connected_number = ''.join(filter(str.isdigit, connected_number))
         client_config = ClientConfig.objects.filter(telefone__endswith=connected_number).first()
@@ -329,52 +327,52 @@ def whatsapp_webhook(request):
             print(f"❌ Nenhum ClientConfig encontrado para o número conectado: {connected_number}")
             return JsonResponse({"error": "ClientConfig não encontrado"}, status=400)
 
-        if data.get("type") == "PresenceChatCallback":
-            phone = data.get("phone")
-            status = data.get("status")
-            with buffer_lock:
-                typing_status[phone] = status
-                if status in ["PAUSED", "AVAILABLE"] and phone in message_buffers:
-                    print(f"⌛ Iniciando timer após pausa do usuário: {phone}")
-                    if "timer" in message_buffers[phone]:
-                        message_buffers[phone]["timer"].cancel()
-                    timer = threading.Timer(5.0, process_buffered_message, args=(phone,))
-                    message_buffers[phone]["timer"] = timer
-                    timer.start()
-            return JsonResponse({"status": "presence processado"})
+        # Extrai e normaliza o número de quem enviou a mensagem
+        sender = str(data.get("phone", "")).replace("+", "").strip()
+        sender = ''.join(filter(str.isdigit, sender))
 
-        sender = data.get("phone")
         message_type = data.get("type")
         is_group = data.get("isGroup", False)
         is_audio = False
 
+        # Trata presença (PAUSED, COMPOSING, AVAILABLE)
+        if message_type == "PresenceChatCallback":
+            status = data.get("status")
+            with buffer_lock:
+                typing_status[sender] = status
+                if status in ["PAUSED", "AVAILABLE"] and sender in message_buffers:
+                    print(f"⌛ Iniciando timer após pausa do usuário: {sender}")
+                    if "timer" in message_buffers[sender]:
+                        message_buffers[sender]["timer"].cancel()
+                    timer = threading.Timer(5.0, process_buffered_message, args=(sender,))
+                    message_buffers[sender]["timer"] = timer
+                    timer.start()
+            return JsonResponse({"status": "presence processado"})
+
         if message_type != "ReceivedCallback" or not sender:
             return JsonResponse({"status": "ignorado"})
 
-        # 👤 FROM ME (do próprio número conectado)
+        # 👤 Mensagens do próprio número conectado
         if data.get("fromMe"):
-            phone = data.get("phone")
             message = data.get("text", {}).get("message")
             if message:
-                registrar_mensagem(phone, message, "usuario", client_config)
+                registrar_mensagem(sender, message, "usuario", client_config)
                 return JsonResponse({"status": "mensagem_salva fromMe"})
             return JsonResponse({"status": "ignorado fromMe"})
 
-        # 🎯 Trata mensagens de grupo
+        # 👥 Mensagens de grupo
         if is_group:
             message = data.get("text", {}).get("message", "")
             participant = data.get("participantPhone")
-
             autor = participant or sender
             registrar_mensagem(sender, message, "pessoa", client_config)
 
             if "@gessie" not in message.lower():
                 print("👥 Mensagem de grupo salva, mas Gessie não foi mencionada")
                 return JsonResponse({"status": "grupo_salvo_sem_mencao"})
-
             print("👥 Gessie foi mencionada, seguindo com processamento")
 
-        # 🎧 Áudio
+        # 🎧 Áudio recebido
         elif "audio" in data:
             is_audio = True
             audio_url = data["audio"].get("audioUrl")
@@ -402,12 +400,12 @@ def whatsapp_webhook(request):
         else:
             return JsonResponse({"status": "ignorado (sem mensagem válida)"})
 
-        # ⚠️ Se o client_config estiver inativo, não prosseguir com execuções
+        # ❌ Cliente inativo: salva, mas não inicia run
         if not client_config.ativo:
             print(f"🚫 Cliente {connected_number} está inativo. Não será iniciado run.")
             return JsonResponse({"status": "mensagem salva sem run"})
 
-        # 🧠 Criação de thread e buffer
+        # 🧠 Gera ou reutiliza thread para o remetente
         thread_obj = Conversation.objects.filter(phone=sender).first()
         if thread_obj and thread_obj.thread_id:
             thread_id = thread_obj.thread_id
@@ -416,6 +414,7 @@ def whatsapp_webhook(request):
             thread_id = thread.id
             Conversation.objects.update_or_create(phone=sender, defaults={"thread_id": thread_id})
 
+        # 🧠 Armazena a mensagem no buffer
         with buffer_lock:
             if sender not in message_buffers:
                 message_buffers[sender] = {
