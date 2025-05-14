@@ -7,6 +7,7 @@ from django.utils.timezone import now
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 import os
+from .fields import ListaHorariosField
 
 # Configuração para armazenamento de fotos
 fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'fotos'))
@@ -168,26 +169,6 @@ class Appointment(models.Model):
 
     def __str__(self):
         return f"{self.person.nome} com {self.profissional} - {self.data_hora.strftime('%d/%m/%Y %H:%M')}"
-
-
-# Campo customizado compatível com SQLite para listas simples
-class ListaHorariosField(models.TextField):
-    description = "Lista de horários como texto separado por vírgulas"
-
-    def from_db_value(self, value, expression, connection):
-        if value is None:
-            return []
-        return value.split(',')
-
-    def to_python(self, value):
-        if isinstance(value, list):
-            return value
-        if value is None:
-            return []
-        return value.split(',')
-
-    def get_prep_value(self, value):
-        return ','.join(value) if isinstance(value, list) else value
 
 
 class Disponibilidade(models.Model):

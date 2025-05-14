@@ -1,14 +1,14 @@
 # bot/serializers.py
 
 from rest_framework import serializers
-from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade, SilencioTemporario
+from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade, SilencioTemporario, Especialidade
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import ClientUser
 from django.utils.timezone import now
 from django.contrib.auth.models import User
 from rest_framework import serializers
-from .models import ClientUser
+import ast
+
 
 class ClientUserSerializer(serializers.ModelSerializer):
     username = serializers.CharField(write_only=True)
@@ -34,10 +34,22 @@ class ClientUserSerializer(serializers.ModelSerializer):
 
         return ClientUser.objects.create(user=user, **validated_data)
 
+ 
 class DisponibilidadeSerializer(serializers.ModelSerializer):
+    horarios = serializers.SerializerMethodField()
+
     class Meta:
         model = Disponibilidade
         fields = '__all__'
+
+    def get_horarios(self, obj):
+        if isinstance(obj.horarios, str):
+            try:
+                return ast.literal_eval(obj.horarios)
+            except Exception as e:
+                print(f"Erro ao converter horários: {e}")
+                return []
+        return obj.horarios
 
 class ClientConfigSerializer(serializers.ModelSerializer):
     class Meta:
@@ -162,3 +174,8 @@ class ConversationSerializer(serializers.ModelSerializer):
             return last_msg and hasattr(user, 'clientuser') and last_msg.client_user == user.clientuser
         except Exception:
             return False
+
+class EspecialidadeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Especialidade
+        fields = '__all__'

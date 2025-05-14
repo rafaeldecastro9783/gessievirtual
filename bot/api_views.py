@@ -12,10 +12,10 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth.models import User
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
-from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message
+from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Especialidade
 from .serializers import (
     ClientConfigSerializer, ClientUserSerializer, PersonSerializer,
-    AppointmentSerializer, ConversationSerializer, MessageSerializer, DisponibilidadeSerializer
+    AppointmentSerializer, ConversationSerializer, MessageSerializer, DisponibilidadeSerializer, EspecialidadeSerializer
 )
 from .utils import enviar_mensagem_whatsapp
 from .gessie_decisoes import gessie_agendar_consulta
@@ -46,6 +46,31 @@ class DisponibilidadeViewSet(ModelViewSet):
         if client_user_id:
             return Disponibilidade.objects.filter(profissional_id=client_user_id)
         return Disponibilidade.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        profissional = request.data.get("profissional")
+        dia_semana = request.data.get("dia_semana")
+        horarios = request.data.get("horarios", [])
+        if isinstance(horarios, str):
+            try:
+                horarios = json.loads(horarios)
+            except Exception:
+                return Response({"erro": "Formato inválido para horários"}, status=400)
+
+        if not profissional or not dia_semana or not horarios:
+            return Response({"erro": "Campos obrigatórios ausentes"}, status=400)
+
+        # Remove entradas duplicadas antes de salvar
+        Disponibilidade.objects.filter(profissional_id=profissional, dia_semana=dia_semana).delete()
+
+        instance = Disponibilidade.objects.create(
+            profissional_id=profissional,
+            dia_semana=dia_semana,
+            horarios=horarios,
+        )
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data, status=201)
+
 
 class AuditoriaMensagensView(ListAPIView):
     serializer_class = MessageSerializer
@@ -407,3 +432,8 @@ def importar_contatos(request):
 
     except Exception as e:
         return Response({"erro": str(e)}, status=500)
+
+class EspecialidadeViewSet(viewsets.ModelViewSet):
+    queryset = Especialidade.objects.all()
+    serializer_class = EspecialidadeSerializer
+    permission_classes = [IsAuthenticated]

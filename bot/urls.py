@@ -6,7 +6,7 @@ from rest_framework_simplejwt.views import (
 )
 from .api_views import (
     ClientConfigViewSet, ClientUserViewSet, PersonViewSet,
-    AppointmentViewSet, ConversationViewSet)
+    AppointmentViewSet, ConversationViewSet, DisponibilidadeViewSet, EspecialidadeViewSet, ClientUserViewSet)
 from .api_views import buscar_ou_criar_pessoa, listar_funcionarios, importar_contatos
 from .api_views import GessieFunctionCallingView
 from .api_views import MessageListCreateView
@@ -20,6 +20,8 @@ router.register(r'pessoas', PersonViewSet, basename='pessoa')
 router.register(r'usuarios', ClientUserViewSet, basename='usuario')
 router.register(r'agendamentos', AppointmentViewSet, basename='agendamento')
 router.register(r'conversas', ConversationViewSet, basename='conversa')
+router.register(r'especialidades', EspecialidadeViewSet, basename='especialidade')
+router.register(r'disponibilidades', DisponibilidadeViewSet, basename='disponibilidade')
 
 
 
