@@ -1,5 +1,6 @@
 # utils.py
 import requests
+import os
 from django.conf import settings
 from bot.models import Appointment, Person, Message, ClientConfig, Conversation, ClientUser, Disponibilidade
 from datetime import datetime, timedelta
@@ -8,6 +9,31 @@ import pytz, calendar
 from dateutil import parser  # Adicione isso no topo
 import unicodedata
 import re
+import tempfile
+
+def enviar_audio_para_zapi_ou_wppapi(audio_bytes, client_config, phone):
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+
+        with open(tmp_path, "rb") as f:
+            files = {'file': ('resposta.ogg', f, 'audio/ogg')}
+            data = {'phone': phone}
+            response = requests.post(
+                client_config.zapi_url_audio,
+                headers={"Client-Token": client_config.zapi_token},
+                files=files,
+                data=data
+            )
+
+        print(f"📤 Envio do áudio finalizado: {response.status_code} - {response.text}")
+
+    except Exception as e:
+        print("❌ Erro ao enviar áudio para API:", e)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 def normalizar_nome(nome):
     return ''.join(c for c in unicodedata.normalize('NFD', nome) if unicodedata.category(c) != 'Mn').lower()

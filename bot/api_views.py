@@ -434,6 +434,13 @@ def importar_contatos(request):
         return Response({"erro": str(e)}, status=500)
 
 class EspecialidadeViewSet(viewsets.ModelViewSet):
-    queryset = Especialidade.objects.all()
     serializer_class = EspecialidadeSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        client = self.request.user.clientuser.client
+        return Especialidade.objects.filter(client=client)
+
+    def perform_create(self, serializer):
+        client = self.request.user.clientuser.client
+        serializer.save(client=client)

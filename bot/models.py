@@ -52,16 +52,20 @@ class Conversation(models.Model):
     phone = models.CharField(max_length=20)
     thread_id = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE)
 
     def __str__(self):
         return f"{self.phone} - {self.thread_id}"
-
 class Especialidade(models.Model):
-    nome = models.CharField(max_length=100, unique=True)
+    nome = models.CharField(max_length=100)
+    client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE, related_name="especialidades")
+
+    class Meta:
+        unique_together = ('nome', 'client')  # evita nomes duplicados dentro do mesmo cliente
 
     def __str__(self):
-        return self.nome
+        return f"{self.nome} ({self.client.nome})"
 
 class ClientUser(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)  

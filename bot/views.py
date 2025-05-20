@@ -3,11 +3,12 @@ from django.http import JsonResponse
 from bot.models import Conversation, ClientConfig, Person, Appointment, Message, ClientUser
 import json, requests, openai, time, os, tempfile, subprocess, base64, threading
 from .gessie_decisoes import analisar_resposta_e_agendar
-from bot.utils import registrar_mensagem, obter_regra, verificar_e_enviar_agendamentos_futuros
+from bot.utils import registrar_mensagem, obter_regra, verificar_e_enviar_agendamentos_futuros, enviar_audio_para_zapi_ou_wppapi
 from bot.utils import listar_profissionais as listar_profissionais_detalhado, extrair_dia_e_turno_do_texto
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
+import os
 import locale
 from django.utils.timezone import now
 from bot.models import SilencioTemporario
@@ -266,15 +267,9 @@ def process_buffered_message(phone):
         try:
             if is_audio:
                 speech_response = openai.audio.speech.create(model="tts-1-hd", voice="shimmer", input=reply)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_file:
-                    audio_file.write(speech_response.read())
-                    audio_path = audio_file.name
-                with open(audio_path, "rb") as f:
-                    base64_audio = f"data:audio/mpeg;base64,{base64.b64encode(f.read()).decode()}"
-                payload = {"phone": phone, "audio": base64_audio, "viewOnce": False, "waveform": True}
-                requests.post(client_config.zapi_url_audio, headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}, json=payload)
+                audio_bytes = speech_response.read()
+                enviar_audio_para_zapi_ou_wppapi(audio_bytes, client_config, phone)
                 registrar_mensagem(phone, "[ÁUDIO ENVIADO]", "gessie", client_config, tipo="áudio")
-                os.remove(audio_path)
             else:
                 payload = {"phone": phone, "message": reply}
                 requests.post(client_config.zapi_url_text, headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}, json=payload)

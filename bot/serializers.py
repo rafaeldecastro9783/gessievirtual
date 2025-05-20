@@ -178,4 +178,5 @@ class ConversationSerializer(serializers.ModelSerializer):
 class EspecialidadeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Especialidade
-        fields = '__all__'
+        fields = ['id', 'nome', 'client']
+        read_only_fields = ['client']
