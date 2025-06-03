@@ -196,23 +196,15 @@ class ClientUserViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if hasattr(self.request.user, 'clientuser'):
             client = self.request.user.clientuser.client
+            serializer.save(user=self.request.user, client=client)
 
-            # Dados que vieram do frontend
-            nome = serializer.validated_data.get("nome")
-            email = serializer.validated_data.get("email")
-            telefone = serializer.validated_data.get("telefone")
-            senha = serializer.validated_data.get("senha")
+    def perform_update(self, serializer):
+        serializer.save()
 
-            # Criação do User
-            user = User.objects.create_user(
-                username=email,
-                email=email,
-                password=senha,
-                first_name=nome
-            )
-
-            # Salvar o ClientUser vinculado ao User e Client
-            serializer.save(user=user, client=client)
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
 
 
 class PersonViewSet(viewsets.ModelViewSet):
@@ -433,13 +425,16 @@ def importar_contatos(request):
     except Exception as e:
         return Response({"erro": str(e)}, status=500)
 
+# views.py
 class EspecialidadeViewSet(viewsets.ModelViewSet):
     serializer_class = EspecialidadeSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        client = self.request.user.clientuser.client
-        return Especialidade.objects.filter(client=client)
+        client_user = getattr(self.request.user, "clientuser", None)
+        if client_user:
+            return Especialidade.objects.filter(client=client_user.client)
+        return Especialidade.objects.none()
 
     def perform_create(self, serializer):
         client = self.request.user.clientuser.client

@@ -1,40 +1,136 @@
 # bot/serializers.py
-
 from rest_framework import serializers
 from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade, SilencioTemporario, Especialidade
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.utils.timezone import now
-from django.contrib.auth.models import User
-from rest_framework import serializers
+from django.utils.crypto import get_random_string
 import ast
+import traceback
 
+
+class EspecialidadeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Especialidade
+        fields = ['id', 'nome', 'client']
+        read_only_fields = ['client']
+
+
+from rest_framework import serializers
+from django.contrib.auth.models import User
+from bot.models import ClientUser, Especialidade
 
 class ClientUserSerializer(serializers.ModelSerializer):
-    username = serializers.CharField(write_only=True)
-    password = serializers.CharField(write_only=True, min_length=6)
+    username = serializers.CharField(write_only=True, required=False)
+    password = serializers.CharField(write_only=True, min_length=6, required=False)
+    senha = serializers.CharField(write_only=True, required=False)
+
+    especialidades = EspecialidadeSerializer(many=True, read_only=True)
+    especialidades_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
 
     class Meta:
         model = ClientUser
-        fields = ['id', 'nome', 'email', 'telefone', 'ativo', 'client', 'username', 'password']
+        fields = [
+            'id', 'nome', 'email', 'telefone', 'ativo', 'client',
+            'username', 'password', 'senha',
+            'especialidades', 'especialidades_ids'
+        ]
         extra_kwargs = {
-            'client': {'read_only': True}  # evita que client_id seja sobrescrito no frontend
+            'client': {'read_only': True}
         }
 
+    def validate_especialidades_ids(self, value):
+        request = self.context.get("request")
+        if request and hasattr(request.user, "clientuser"):
+            client = request.user.clientuser.client
+            allowed_ids = set(Especialidade.objects.filter(client=client).values_list("id", flat=True))
+            invalid_ids = [pk for pk in value if pk not in allowed_ids]
+
+            if invalid_ids:
+                raise serializers.ValidationError(f"Especialidades inválidas: {invalid_ids}")
+        return value
+
     def create(self, validated_data):
-        username = validated_data.pop('username')
-        password = validated_data.pop('password')
+        especialidades_ids = validated_data.pop('especialidades_ids', [])
+        validated_data.pop('username', None)
+        validated_data.pop('password', None)
+        validated_data.pop('user', None)
+        validated_data.pop('client', None)  # 🔧 remove duplicidade
+        senha = validated_data.pop('senha', '')
+
+        request = self.context.get("request")
+        client = request.user.clientuser.client if request and hasattr(request.user, 'clientuser') else None
+
+        from django.contrib.auth.models import User
+        from django.utils.crypto import get_random_string
+
+        email = validated_data.get("email", "")
+        nome = validated_data.get("nome", "")
+        username = f"{email}-{get_random_string(5)}"
 
         user = User.objects.create_user(
             username=username,
-            password=password,
-            email=validated_data.get('email'),
-            first_name=validated_data.get('nome', '')
+            email=email,
+            password=get_random_string(12),
+            first_name=nome
         )
 
-        return ClientUser.objects.create(user=user, **validated_data)
+        client_user = ClientUser.objects.create(
+            user=user,
+            client=client,
+            senha=senha,
+            **validated_data
+        )
 
- 
+        especialidades = Especialidade.objects.filter(id__in=especialidades_ids)
+        client_user.especialidades.set(especialidades)
+
+        return client_user
+
+    def update(self, instance, validated_data):
+        from rest_framework.exceptions import ValidationError
+        import traceback
+
+        try:
+            especialidades_ids = validated_data.pop('especialidades_ids', None)
+            if especialidades_ids is not None:
+                especialidades = Especialidade.objects.filter(id__in=especialidades_ids)
+                instance.especialidades.set(especialidades)
+
+            username = validated_data.pop('username', None)
+            password = validated_data.pop('password', None)
+            senha = validated_data.pop('senha', None)
+
+            instance.nome = validated_data.get('nome', instance.nome)
+            instance.telefone = validated_data.get('telefone', instance.telefone)
+            instance.email = validated_data.get('email', instance.email)
+            if senha:
+                instance.senha = senha
+            instance.save()
+
+            user = instance.user
+            if username:
+                user.username = username
+            if password:
+                user.set_password(password)
+            user.email = instance.email
+            user.first_name = instance.nome
+            user.save()
+
+            return instance
+
+        except ValidationError as ve:
+            print("❌ Erro de validação:", ve.detail)
+            raise ve
+        except Exception as e:
+            print("❌ Erro inesperado no update:", e)
+            print(traceback.format_exc())
+            raise e
+
 class DisponibilidadeSerializer(serializers.ModelSerializer):
     horarios = serializers.SerializerMethodField()
 
@@ -175,8 +271,3 @@ class ConversationSerializer(serializers.ModelSerializer):
         except Exception:
             return False
 
-class EspecialidadeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Especialidade
-        fields = ['id', 'nome', 'client']
-        read_only_fields = ['client']

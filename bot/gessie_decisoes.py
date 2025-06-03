@@ -38,6 +38,7 @@ def analisar_resposta_e_agendar(reply, phone, client_config):
     print("🤖 Analisando resposta para agendamento...")
     resposta_normalizada = reply.lower()
 
+    # 1️⃣ Cancelamento explícito
     if any(p in resposta_normalizada for p in ["cancelar", "desmarcar", "remover", "quero cancelar", "desisti"]):
         pessoa = Person.objects.filter(telefone=phone, client=client_config).first()
         if pessoa:
@@ -45,30 +46,42 @@ def analisar_resposta_e_agendar(reply, phone, client_config):
             gessie_cancelar_agendamento(pessoa.nome, pessoa.telefone, client_config)
         return
 
-    if any(p in resposta_normalizada for p in ["agendei", "consulta marcada", "vamos marcar", "agendado", "vou agendar"]):
-        pessoa, _ = Person.objects.get_or_create(
-            telefone=phone,
-            defaults={"nome": "Novo contato", "client": client_config, "grau_interesse": "médio"}
-        )
+    # 2️⃣ Agendamento só se a frase for bem clara
+    gatilhos_confirmados = [
+        "quero agendar", "marcar consulta", "agendar agora", "pode marcar",
+        "sim, quero", "pode agendar", "quero marcar", "vamos agendar"
+    ]
+    if not any(g in resposta_normalizada for g in gatilhos_confirmados):
+        print("🛑 Nenhuma intenção clara de agendamento detectada. Ignorando.")
+        return
 
-        profissional = ClientUser.objects.filter(client=client_config, ativo=True).first()
-        if profissional:
-            data_hora = encontrar_proximo_horario_disponivel(profissional)
-            if data_hora:
-                agendamento = Appointment.objects.create(
-                    client=client_config,
-                    person=pessoa,
-                    client_user=profissional,
-                    data_hora=data_hora,
-                    profissional=profissional.nome,
-                    confirmado=True
-                )
-                enviar_mensagem_whatsapp(profissional, pessoa, data_hora, client_config)
-                print(f"✅ Agendamento criado para {data_hora}")
-            else:
-                print("⚠️ Nenhum horário disponível para hoje.")
-        else:
-            print("⚠️ Nenhum profissional ativo encontrado.")
+    pessoa, _ = Person.objects.get_or_create(
+        telefone=phone,
+        client=client_config,
+        defaults={"nome": "Novo contato", "grau_interesse": "médio"}
+    )
+
+    profissional = ClientUser.objects.filter(client=client_config, ativo=True).first()
+    if not profissional:
+        print("⚠️ Nenhum profissional ativo encontrado.")
+        return
+
+    data_hora = encontrar_proximo_horario_disponivel(profissional)
+    if not data_hora or data_hora < timezone_now():
+        print("⚠️ Nenhum horário disponível futuro encontrado.")
+        return
+
+    agendamento = Appointment.objects.create(
+        client=client_config,
+        person=pessoa,
+        client_user=profissional,
+        data_hora=data_hora,
+        profissional=profissional.nome,
+        confirmado=True
+    )
+
+    enviar_mensagem_whatsapp(profissional, pessoa, data_hora, client_config)
+    print(f"✅ Agendamento criado para {data_hora.strftime('%d/%m/%Y %H:%M')}")
 
 # 🧠 Função para Function Calling
 def gessie_agendar_consulta(

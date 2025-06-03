@@ -36,7 +36,7 @@ class ClientConfig(models.Model):
     zapi_url_audio = models.URLField()
     zapi_token = models.CharField(max_length=255)
 
-    # Integração OpenAI
+    # Integração OpenAI 
     assistant_id = models.CharField(max_length=100)
     prompt_personalizado = models.TextField()
 
@@ -57,6 +57,7 @@ class Conversation(models.Model):
 
     def __str__(self):
         return f"{self.phone} - {self.thread_id}"
+        
 class Especialidade(models.Model):
     nome = models.CharField(max_length=100)
     client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE, related_name="especialidades")
