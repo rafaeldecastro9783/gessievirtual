@@ -74,12 +74,9 @@ def consultar_boleto_condomob(cpfCnpj: str, telefone: str, client_config=None):
 
 🔁 Caso prefira, você também pode pagar via *PIX*:
 {resultado.get("pix")}
-"""
 
-        # 4. Registrar e enviar pelo WhatsApp
-        if client_config:
-            registrar_mensagem(telefone, mensagem, enviado_por="gessie", client_config=client_config, tipo="texto")
-            enviar_texto_whatsapp_condomob(telefone, mensagem, client_config)
+Prezado(a), antes de efetuar o pagamento, pedimos, por gentileza, que verifique se os dados do boleto estão corretos.
+"""
 
         return mensagem.strip()
 
