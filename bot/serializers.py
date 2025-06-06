@@ -1,6 +1,6 @@
 # bot/serializers.py
 from rest_framework import serializers
-from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade, SilencioTemporario, Especialidade
+from .models import ClientConfig, UnidadeDeAtendimento, ClientUser, Person, Appointment, Conversation, Message, Disponibilidade, SilencioTemporario, Especialidade
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.utils.timezone import now
@@ -16,6 +16,13 @@ class EspecialidadeSerializer(serializers.ModelSerializer):
         read_only_fields = ['client']
 
 
+class UnidadeDeAtendimentoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UnidadeDeAtendimento
+        fields = '__all__'
+        read_only_fields = ['client']
+
+
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from bot.models import ClientUser, Especialidade
@@ -24,6 +31,13 @@ class ClientUserSerializer(serializers.ModelSerializer):
     username = serializers.CharField(write_only=True, required=False)
     password = serializers.CharField(write_only=True, min_length=6, required=False)
     senha = serializers.CharField(write_only=True, required=False)
+    
+    unidades = UnidadeDeAtendimentoSerializer(many=True, read_only=True)
+    unidades_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
 
     especialidades = EspecialidadeSerializer(many=True, read_only=True)
     especialidades_ids = serializers.ListField(
@@ -36,7 +50,7 @@ class ClientUserSerializer(serializers.ModelSerializer):
         model = ClientUser
         fields = [
             'id', 'nome', 'email', 'telefone', 'ativo', 'client',
-            'username', 'password', 'senha',
+            'username', 'password', 'senha', 'unidades_ids', 'unidades',
             'especialidades', 'especialidades_ids'
         ]
         extra_kwargs = {
@@ -60,6 +74,8 @@ class ClientUserSerializer(serializers.ModelSerializer):
         validated_data.pop('password', None)
         validated_data.pop('user', None)
         validated_data.pop('client', None)  # 🔧 remove duplicidade
+        
+        unidades_ids = validated_data.pop('unidades_ids', [])
         senha = validated_data.pop('senha', '')
 
         request = self.context.get("request")
@@ -89,6 +105,9 @@ class ClientUserSerializer(serializers.ModelSerializer):
         especialidades = Especialidade.objects.filter(id__in=especialidades_ids)
         client_user.especialidades.set(especialidades)
 
+        if unidades_ids:
+            unidades = UnidadeDeAtendimento.objects.filter(id__in=unidades_ids, client=client)
+            client_user.unidades.set(unidades)
         return client_user
 
     def update(self, instance, validated_data):
@@ -105,6 +124,8 @@ class ClientUserSerializer(serializers.ModelSerializer):
             password = validated_data.pop('password', None)
             senha = validated_data.pop('senha', None)
 
+            unidades_ids = validated_data.pop('unidades_ids', None)
+
             instance.nome = validated_data.get('nome', instance.nome)
             instance.telefone = validated_data.get('telefone', instance.telefone)
             instance.email = validated_data.get('email', instance.email)
@@ -120,6 +141,10 @@ class ClientUserSerializer(serializers.ModelSerializer):
             user.email = instance.email
             user.first_name = instance.nome
             user.save()
+
+            if unidades_ids is not None:
+                unidades = UnidadeDeAtendimento.objects.filter(id__in=unidades_ids, client=instance.client)
+                instance.unidades.set(unidades)
 
             return instance
 
@@ -179,13 +204,19 @@ class PersonSerializer(serializers.ModelSerializer):
 
 
 class AppointmentSerializer(serializers.ModelSerializer):
-    person_nome = serializers.CharField(source="person.nome", read_only=True)
-    client_user_nome = serializers.CharField(source="client_user.nome", read_only=True)
+    person_nome = serializers.CharField(source='person.nome', read_only=True)
+    client_user_nome = serializers.CharField(source='client_user.nome', read_only=True)
+    profissional = serializers.PrimaryKeyRelatedField(queryset=ClientUser.objects.all())
+    profissional_nome = serializers.CharField(source='profissional.nome', read_only=True)
 
     class Meta:
         model = Appointment
-        fields = ['id', 'data_hora', 'profissional', 'observacoes', 'confirmado', 'person_nome', 'client_user_nome']
-
+        fields = [
+            'id', 'person', 'person_nome', 'data_hora',
+            'profissional', 'profissional_nome',
+            'client_user', 'client_user_nome',
+            'observacoes', 'confirmado'
+        ]
 
 # serializers.py
 class MessageSerializer(serializers.ModelSerializer):
@@ -271,3 +302,12 @@ class ConversationSerializer(serializers.ModelSerializer):
         except Exception:
             return False
 
+from rest_framework import serializers
+from .models import OrdemServico
+
+class OrdemServicoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrdemServico
+        fields = '__all__'
+
+# serializers.py

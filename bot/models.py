@@ -47,6 +47,17 @@ class ClientConfig(models.Model):
     def __str__(self):
         return self.nome
 
+class UnidadeDeAtendimento(models.Model):
+    nome = models.CharField(max_length=255)
+    endereco = models.TextField()
+    telefone = models.CharField(max_length=20, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    cnpj = models.CharField(max_length=18, blank=True, null=True)
+    client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE, related_name='unidades')
+
+    def __str__(self):
+        return f"{self.nome} ({self.client.nome})"
+
 # 🔁 Threads de conversa com o assistente da OpenAI
 class Conversation(models.Model):
     phone = models.CharField(max_length=20)
@@ -77,8 +88,8 @@ class ClientUser(models.Model):
     senha = models.CharField(max_length=255)  
     foto_url = models.URLField(blank=True, null=True)
     ativo = models.BooleanField(default=True)
-    especialidades = models.ManyToManyField(Especialidade, blank=True)  
-
+    especialidades = models.ManyToManyField(Especialidade, blank=True)
+    unidades = models.ManyToManyField('UnidadeDeAtendimento', related_name='profissionais', blank=True)
 
     def __str__(self):
         return f"{self.nome} ({self.client.nome})"
@@ -168,7 +179,7 @@ class Appointment(models.Model):
     client_user = models.ForeignKey(ClientUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="agendamentos_recebidos")
     data_hora = models.DateTimeField()
     criado_em = models.DateTimeField(default=now)
-    profissional = models.CharField(max_length=255)
+    profissional = models.ForeignKey(ClientUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="agendamentos_como_profissional")
     observacoes = models.TextField(blank=True, null=True)
     confirmado = models.BooleanField(default=False)
 
@@ -195,3 +206,24 @@ class Disponibilidade(models.Model):
 class SilencioTemporario(models.Model):
     phone = models.CharField(max_length=20, unique=True)
     ate = models.DateTimeField()
+
+
+class OrdemServico(models.Model):
+    numero_os = models.CharField(max_length=20, unique=True)
+    data_emissao = models.DateField(auto_now_add=True)
+    cliente_nome = models.CharField(max_length=255)
+    cliente_endereco = models.TextField()
+    cliente_contato = models.CharField(max_length=100)
+
+    descricao_servico = models.TextField()
+    profissional_responsavel = models.ForeignKey(ClientUser, on_delete=models.SET_NULL, null=True)
+    
+    materiais_equipamentos = models.TextField(blank=True)
+    tempo_estimado = models.CharField(max_length=100)
+    custo = models.DecimalField(max_digits=10, decimal_places=2)
+
+    client = models.ForeignKey(ClientConfig, on_delete=models.CASCADE)  # vínculo com o cliente principal
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"OS #{self.numero_os} - {self.cliente_nome}"

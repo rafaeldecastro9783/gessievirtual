@@ -8,7 +8,8 @@ from .models import (
     Message,
     Appointment,
     Especialidade,
-    Disponibilidade
+    Disponibilidade,
+    OrdemServico
 )
 import json
 from django.utils.html import format_html
@@ -63,12 +64,11 @@ class ClientUserAdmin(admin.ModelAdmin):
     list_display = ('nome', 'email', 'telefone', 'client', 'ativo', 'listar_especialidades')
     search_fields = ('nome', 'email', 'telefone', 'especialidades__nome')
     list_filter = ('ativo', 'client')
-    filter_horizontal = ('especialidades',)
+    filter_horizontal = ('especialidades', 'unidades')  # ✅ aqui!
     inlines = [DisponibilidadeInline]
 
     def listar_especialidades(self, obj):
         return format_html("<br>".join([e.nome for e in obj.especialidades.all()]))
-
 
 @admin.register(Especialidade)
 class EspecialidadeAdmin(admin.ModelAdmin):
@@ -101,6 +101,11 @@ class AppointmentAdmin(admin.ModelAdmin):
     ordering = ('-data_hora',)
     actions = [desconfirmar_agendamentos]
 
-
-
+# @admin.register(OrdemServico)
+#class OrdemServicoAdmin(admin.ModelAdmin):
+ #   list_display = ('id', 'client', 'profissional', 'status', 'criado_em', 'atualizado_em')
+ #   search_fields = ('client__nome', 'profissional__nome', 'status', 'descricao')
+ #   list_filter = ('status', 'criado_em')
+ #   ordering = ('-criado_em',)
+ #  readonly_fields = ('criado_em', 'atualizado_em')
 

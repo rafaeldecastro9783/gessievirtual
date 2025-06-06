@@ -5,7 +5,7 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 from .api_views import (
-    ClientConfigViewSet, ClientUserViewSet, PersonViewSet,
+    ClientConfigViewSet, ClientUserViewSet, UnidadeDeAtendimentoViewSet, PersonViewSet, OrdemServicoViewSet, horarios_disponiveis_profissional,
     AppointmentViewSet, ConversationViewSet, DisponibilidadeViewSet, EspecialidadeViewSet, ClientUserViewSet)
 from .api_views import buscar_ou_criar_pessoa, listar_funcionarios, importar_contatos
 from .api_views import GessieFunctionCallingView
@@ -22,7 +22,8 @@ router.register(r'agendamentos', AppointmentViewSet, basename='agendamento')
 router.register(r'conversas', ConversationViewSet, basename='conversa')
 router.register(r'especialidades', EspecialidadeViewSet, basename='especialidade')
 router.register(r'disponibilidades', DisponibilidadeViewSet, basename='disponibilidade')
-
+router.register(r'ordens-servico', OrdemServicoViewSet, basename='ordemservico')
+router.register(r"unidades", UnidadeDeAtendimentoViewSet, basename='unidade')
 
 
 # Todas as rotas
@@ -40,6 +41,7 @@ urlpatterns = [
     path("auditoria/mensagens/", AuditoriaMensagensView.as_view(), name="auditoria-mensagens"),
     path("gessie/function-calling/", GessieFunctionCallingView.as_view(), name="gessie_function_calling"),
     path("importar-contatos/", importar_contatos, name="importar-contatos"),
+    path("profissional/<int:profissional_id>/horarios-disponiveis/", horarios_disponiveis_profissional),
 
 ]
 

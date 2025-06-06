@@ -12,18 +12,20 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth.models import User
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
-from .models import ClientConfig, ClientUser, Person, Appointment, Conversation, Message, Especialidade
+from .models import ClientConfig, UnidadeDeAtendimento, OrdemServico, ClientUser, Person, Appointment, Conversation, Message, Especialidade
 from .serializers import (
-    ClientConfigSerializer, ClientUserSerializer, PersonSerializer,
+    ClientConfigSerializer, UnidadeDeAtendimentoSerializer, ClientUserSerializer, PersonSerializer, OrdemServicoSerializer,
     AppointmentSerializer, ConversationSerializer, MessageSerializer, DisponibilidadeSerializer, EspecialidadeSerializer
 )
-from .utils import enviar_mensagem_whatsapp
+from .utils import enviar_mensagem_whatsapp, avisar_profissional
+from datetime import datetime
 from .gessie_decisoes import gessie_agendar_consulta
 from django.utils.timezone import now
 from datetime import timedelta
 from bot.models import SilencioTemporario
 from django.db.models import Max
 import requests
+from rest_framework import generics, permissions
 
 
 @api_view(["GET"])
@@ -88,13 +90,6 @@ class AuditoriaMensagensView(ListAPIView):
         return Message.objects.none()
 
 
-from rest_framework import generics, permissions
-from rest_framework import generics, permissions
-from rest_framework.response import Response
-from django.shortcuts import get_object_or_404
-from .models import Message, Conversation
-from .serializers import MessageSerializer
-import requests
 
 class MessageListCreateView(generics.ListCreateAPIView):
     serializer_class = MessageSerializer
@@ -241,10 +236,26 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if hasattr(self.request.user, 'clientuser'):
             client_user = self.request.user.clientuser
-            appointment = serializer.save(client=client_user.client, client_user=client_user)
-            if appointment.person:
-                enviar_mensagem_whatsapp(client_user, appointment.person, appointment.data_hora)
 
+            # Salva o agendamento com o client e o client_user logado (quem criou)
+            appointment = serializer.save(client=client_user.client, client_user=client_user)
+
+            profissional = appointment.profissional  # Já é um ClientUser, pois agora é FK
+
+            # Verifica se há uma pessoa para notificar
+            if appointment.person and profissional:
+                enviar_mensagem_whatsapp(
+                    client_user=profissional,
+                    person=appointment.person,
+                    data_hora=appointment.data_hora,
+                    client_config=client_user.client
+                )
+                avisar_profissional(
+                    profissional_nome=profissional.nome,
+                    pessoa_nome=appointment.person.nome,
+                    data_hora=appointment.data_hora,
+                    client_config=client_user.client
+                )
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
@@ -360,13 +371,6 @@ def silenciar_gessie(request):
     return Response({"mensagem": f"Gessie silenciada até {ate}."})
 
 
-
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from bot.models import Person
-import requests
-
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def importar_contatos(request):
@@ -435,6 +439,68 @@ class EspecialidadeViewSet(viewsets.ModelViewSet):
         if client_user:
             return Especialidade.objects.filter(client=client_user.client)
         return Especialidade.objects.none()
+
+    def perform_create(self, serializer):
+        client = self.request.user.clientuser.client
+        serializer.save(client=client)
+
+
+class OrdemServicoViewSet(viewsets.ModelViewSet):
+    serializer_class = OrdemServicoSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, "clientuser"):
+            return OrdemServico.objects.filter(client=user.clientuser.client)
+        return OrdemServico.objects.none()
+
+    def perform_create(self, serializer):
+        client = self.request.user.clientuser.client
+        serializer.save(client=client)
+
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def horarios_disponiveis_profissional(request, profissional_id):
+    """
+    Retorna os horários disponíveis de um profissional agrupados por dia da semana.
+    """
+    disponibilidades = Disponibilidade.objects.filter(profissional_id=profissional_id)
+
+    resultado = {}
+    for d in disponibilidades:
+        if d.dia_semana not in resultado:
+            resultado[d.dia_semana] = []
+        resultado[d.dia_semana].extend(d.horarios)
+
+    return Response(resultado)
+
+# views.py
+class UnidadeDeAtendimentoViewSet(viewsets.ModelViewSet):
+    serializer_class = UnidadeDeAtendimentoSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = UnidadeDeAtendimento.objects.none()  # ⬅️ adiciona isto como fallback
+
+    def get_queryset(self):
+        user = self.request.user
+
+        if hasattr(user, 'clientuser'):
+            client = user.clientuser.client
+            qs = UnidadeDeAtendimento.objects.filter(client=client)
+
+            client_user_id = self.request.query_params.get("client_user_id")
+            if client_user_id:
+                try:
+                    profissional = ClientUser.objects.get(id=client_user_id, client=client)
+                    return profissional.unidades.all()
+                except ClientUser.DoesNotExist:
+                    return UnidadeDeAtendimento.objects.none()
+
+            return qs
+
+        return UnidadeDeAtendimento.objects.none()
 
     def perform_create(self, serializer):
         client = self.request.user.clientuser.client

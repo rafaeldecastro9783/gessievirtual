@@ -110,70 +110,6 @@ def extrair_dia_e_turno_do_texto(texto):
 
     return data_real, dia_semana_nome, turno_encontrado
 
-
-def enviar_mensagem_whatsapp(usuario, pessoa, data_hora, client_config, texto=None):
-    print('Entrou na função enviar_mensagem_whatsapp')
-    if not usuario.telefone:
-        print("⚠️ Número de telefone do usuário não encontrado!")
-        return
-    if not texto:
-        texto = f"Olá {usuario.nome}, você tem um novo agendamento com {pessoa.nome} no dia {data_hora.strftime('%d/%m/%Y %H:%M')}."
-
-    payload = {
-        "phone": usuario.telefone,
-        "message": texto
-    }
-    headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}
-    response=requests.post(client_config.zapi_url_text, json=payload, headers=headers)
-    if response.status_code != 200:
-        print(f"⚠️ Falha ao enviar mensagem WhatsApp: {response.status_code} | {response.text}")
-    else:
-        print("✅ Mensagem enviada com sucesso via WhatsApp!")
-
-def avisar_profissional(profissional_nome, data_hora, pessoa_nome, client_config):
-    from bot.models import ClientUser
-    import requests
-    import unicodedata
-
-    try:
-        print("🚀 Entrou na função avisar_profissional")
-
-        def normalizar(texto):
-            return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8').casefold()
-
-        profissionais = ClientUser.objects.filter(client=client_config, ativo=True)
-        profissional = None
-
-        for p in profissionais:
-            if normalizar(p.nome) == normalizar(profissional_nome):
-                profissional = p
-                break
-
-        if not profissional or not profissional.telefone:
-            print(f"⚠️ Profissional '{profissional_nome}' encontrado mas sem telefone válido.")
-            return
-
-        texto = (
-            f"📅 *Novo agendamento confirmado!*\n\n"
-            f"👤 Paciente: {pessoa_nome}\n"
-            f"🗓️ Data: {data_hora.strftime('%A, %d/%m às %H:%M')}\n\n"
-            "✅ Por favor, se organize para receber o atendimento."
-        )
-
-        payload = {"phone": profissional.telefone, "message": texto}
-        headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}
-        print(f"🔔 Enviando aviso para {profissional.nome} ({profissional.telefone})...")
-        response = requests.post(client_config.zapi_url_text, json=payload, headers=headers)
-
-        if response.status_code == 200:
-            print("✅ Aviso enviado com sucesso!")
-        else:
-            print(f"⚠️ Erro ao enviar aviso! Código: {response.status_code} | Resposta: {response.text}")
-
-    except Exception as e:
-        print("❌ Erro em avisar_profissional:", e)
-
-
 def calcular_proxima_data_semana(dia_semana_str):
     dias_semana = {
         "segunda": 0, "terça": 1, "terca": 1, "quarta": 2,
@@ -669,3 +605,71 @@ def obter_regra(client_config, chave, default=None):
     except Exception as e:
         print(f"⚠️ Erro ao obter regra '{chave}':", e)
         return default
+
+def enviar_mensagem_whatsapp(client_user, person, data_hora, client_config, texto=None):
+    print('Entrou na função enviar_mensagem_whatsapp')
+    if not person.telefone:
+        print("⚠️ Número de telefone do usuário não encontrado!")
+        return
+    if not texto:
+        texto = f"Olá {person.telefone}, você tem um novo agendamento com {client_user.nome} no dia {data_hora.strftime('%d/%m/%Y %H:%M')}."
+
+    payload = {
+        "phone": person.telefone,
+        "message": texto
+    }
+    headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}
+    response=requests.post(client_config.zapi_url_text, json=payload, headers=headers)
+    if response.status_code != 200:
+        print(f"⚠️ Falha ao enviar mensagem WhatsApp: {response.status_code} | {response.text}")
+    else:
+        print("✅ Mensagem enviada com sucesso via WhatsApp!")
+        registrar_mensagem(
+            phone = person.telefone,
+            mensagem = texto, 
+            enviado_por = 'gessie', 
+            client_config = client_config, 
+            tipo="texto")
+
+def avisar_profissional(profissional_nome, data_hora, pessoa_nome, client_config):
+    from bot.models import ClientUser
+    import requests
+    import unicodedata
+
+    try:
+        print("🚀 Entrou na função avisar_profissional")
+
+        def normalizar(texto):
+            return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8').casefold()
+
+        profissionais = ClientUser.objects.filter(client=client_config, ativo=True)
+        profissional = None
+
+        for p in profissionais:
+            if normalizar(p.nome) == normalizar(profissional_nome):
+                profissional = p
+                break
+
+        if not profissional or not profissional.telefone:
+            print(f"⚠️ Profissional '{profissional_nome}' encontrado mas sem telefone válido.")
+            return
+
+        texto = (
+            f"📅 *Novo agendamento confirmado!*\n\n"
+            f"👤 Cliente: {pessoa_nome}\n"
+            f"🗓️ Data: {data_hora.strftime('%A, %d/%m às %H:%M')}\n\n"
+            "✅ Por favor, se organize para receber o atendimento."
+        )
+
+        payload = {"phone": profissional.telefone, "message": texto}
+        headers={"Content-Type": "application/json", "Client-Token": client_config.zapi_token}
+        print(f"🔔 Enviando aviso para {profissional.nome} ({profissional.telefone})...")
+        response = requests.post(client_config.zapi_url_text, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            print("✅ Aviso enviado com sucesso!")
+        else:
+            print(f"⚠️ Erro ao enviar aviso! Código: {response.status_code} | Resposta: {response.text}")
+
+    except Exception as e:
+        print("❌ Erro em avisar_profissional:", e)

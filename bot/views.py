@@ -8,6 +8,7 @@ from bot.utils import listar_profissionais as listar_profissionais_detalhado, ex
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
+from bot.api_condomob import consultar_boleto_condomob
 import os
 import locale
 from django.utils.timezone import now
@@ -189,6 +190,20 @@ def process_buffered_message(phone):
                             planos_que_exigem = obter_regra(client_config, "encaminhamento_obrigatorio_planos", [])
                             if plano != "particular" and plano in planos_que_exigem:
                                 reply += "\n📎 Para esse plano, será necessário o encaminhamento médico e a carteirinha."
+                   
+                    elif tool_call.function.name == "consultar_boleto_condomob":
+                        from bot.api_condomob import consultar_boleto_condomob
+
+                        cpf = args.get("cpfCnpj")
+
+                        if not cpf:
+                            result = {"erro": "CPF não informado."}
+                        else:
+                            result_text = consultar_boleto_condomob(cpfCnpj=cpf, telefone=phone, client_config=client_config)
+                            result = {"mensagem": result_text}
+
+                        registrar_mensagem(phone, f"[FUNÇÃO]: {tool_call.function.name}\n{args}", "gessie", client_config)
+                        print(phone, f"[FUNÇÃO]: {tool_call.function.name}\n{args}", "gessie", client_config)
 
                     elif tool_call.function.name == "gessie_agendar_consulta":
                         from bot.utils import avisar_profissional
