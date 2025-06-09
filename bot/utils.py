@@ -140,14 +140,14 @@ def salvar_agendamento(arguments, client_config, phone):
         nome_profissional = arguments.get("profissional")
         turno_preferido = arguments.get("turno_preferido", "")
         data_preferida = arguments.get("data_preferida", None)
+        unidade_id = arguments.get("unidade_id")  # NOVO
 
-        print(f"Dados recebidos: nome={nome}, idade={idade}, profissional={nome_profissional}, data_preferida={data_preferida}, turno={turno_preferido}")
+        print(f"Dados recebidos: nome={nome}, idade={idade}, profissional={nome_profissional}, data_preferida={data_preferida}, turno={turno_preferido}, unidade_id={unidade_id}")
 
         if not data_preferida:
             print("❌ Data preferida não fornecida.")
             return None
 
-        # Corrigir data_preferida para o futuro
         if isinstance(data_preferida, str):
             try:
                 data_agendada = datetime.fromisoformat(data_preferida).date()
@@ -160,7 +160,6 @@ def salvar_agendamento(arguments, client_config, phone):
         hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
         if data_agendada < hoje:
             print(f"⚠️ Data preferida estava no passado ({data_agendada}), ajustando para próxima semana...")
-            # Joga para próxima semana mantendo o mesmo dia da semana
             dias_ate = (data_agendada.weekday() - hoje.weekday()) % 7
             if dias_ate == 0:
                 dias_ate = 7
@@ -183,6 +182,9 @@ def salvar_agendamento(arguments, client_config, phone):
             return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8').casefold()
 
         profissionais = ClientUser.objects.filter(client=client_config, ativo=True)
+        if unidade_id:
+            profissionais = profissionais.filter(unidade_id=unidade_id)  # NOVO
+
         profissional_obj = None
         for p in profissionais:
             if normalizar(p.nome) == normalizar(nome_profissional):
@@ -204,7 +206,6 @@ def salvar_agendamento(arguments, client_config, phone):
 
         print(f"Horários disponíveis: {[h.strftime('%H:%M') for h in horarios_disponiveis]}")
 
-        # Escolher horário baseado no turno ou pegar o primeiro disponível
         data_hora_agendamento = None
         if turno_preferido:
             try:
@@ -230,6 +231,16 @@ def salvar_agendamento(arguments, client_config, phone):
         if not data_hora_agendamento:
             data_hora_agendamento = horarios_disponiveis[0]
 
+        # 🔐 VERIFICA SE HORÁRIO AINDA É VÁLIDO NO MESMO DIA
+        agora = datetime.now(pytz.timezone('America/Sao_Paulo'))
+        if data_hora_agendamento <= agora:
+            print("⚠️ Horário sugerido já passou. Buscando outro disponível...")
+            futuros = [h for h in horarios_disponiveis if h > agora]
+            if not futuros:
+                print("❌ Nenhum horário futuro disponível.")
+                return None
+            data_hora_agendamento = futuros[0]
+
         print(f"🕒 Agendamento marcado para: {data_hora_agendamento}")
 
         observacoes = f"Tipo: {arguments.get('tipo_atendimento')} | Plano: {arguments.get('plano_saude')}"
@@ -244,13 +255,32 @@ def salvar_agendamento(arguments, client_config, phone):
             confirmado=True,
         )
 
-        # Enviar WhatsApp só se tiver telefone
         from bot.utils import enviar_mensagem_whatsapp, avisar_profissional
         if client_config and client_config.zapi_token and client_config.zapi_url_text:
             enviar_mensagem_whatsapp(usuario=client_config, pessoa=person, data_hora=data_hora_agendamento, client_config=client_config)
 
         if profissional_obj and profissional_obj.telefone:
             avisar_profissional(profissional_nome=profissional_obj.nome, data_hora=data_hora_agendamento, pessoa_nome=person.nome, client_config=client_config)
+        # Envia para o número da unidade (caso exista)
+        if profissional.unidade and profissional.unidade.telefone:
+            texto_unidade = (
+                f"📋 Novo agendamento para a unidade *{profissional.unidade.nome}*:\n"
+                f"👤 Paciente: {pessoa.nome}\n"
+                f"🧑‍⚕️ Profissional: {profissional.nome}\n"
+                f"🕒 Horário: {data_hora.strftime('%A, %d/%m às %H:%M')}"
+            )
+
+            payload = {
+                "phone": profissional.unidade.telefone,
+                "message": texto_unidade
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Client-Token": client_config.zapi_token
+            }
+            requests.post(client_config.zapi_url_text, json=payload, headers=headers)
+
+            print(f"📲 Aviso enviado para unidade {profissional.unidade.nome} no número {profissional.unidade.telefone}")
 
         print("✅ Agendamento salvo com sucesso!")
         return agendamento
@@ -313,6 +343,7 @@ def verificar_disponibilidade_consulta(arguments, client_config):
     print('Entrou na função verificar_disponibilidade_consulta')
 
     try:
+        unidade_id = arguments.get("unidade_id")
         turno = arguments.get("turno", "").lower()
         dia_semana = arguments.get("dia", "").lower()
         profissional_nome = arguments.get("profissional")
@@ -321,7 +352,13 @@ def verificar_disponibilidade_consulta(arguments, client_config):
             nome__iexact=profissional_nome,
             client=client_config,
             ativo=True
-        ).first()
+        )
+
+        if unidade_id:
+            profissional_obj = profissional_obj.filter(unidade_id=unidade_id)
+
+        profissional_obj = profissional_obj.first()
+
 
         if not profissional_obj:
             return {

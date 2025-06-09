@@ -11,8 +11,24 @@ from bot.utils import (
 )
 
 # 🔎 Busca o próximo horário disponível para um profissional
-def encontrar_proximo_horario_disponivel(profissional, data_desejada=None):
+def encontrar_proximo_horario_disponivel(client_config, unidade_id=None, profissional_nome=None, data_desejada=None):
     print("🔍 Buscando próximo horário disponível...")
+
+    from bot.models import ClientUser, Appointment
+    from datetime import datetime
+    from django.utils.timezone import now as timezone_now
+
+    query = ClientUser.objects.filter(client=client_config, ativo=True)
+    if unidade_id:
+        query = query.filter(unidade_id=unidade_id)
+    if profissional_nome:
+        query = query.filter(nome__iexact=profissional_nome)
+
+    profissional = query.first()
+    if not profissional:
+        print("❌ Profissional não encontrado.")
+        return None
+
     if not data_desejada:
         data_desejada = timezone_now().date()
 
@@ -27,10 +43,14 @@ def encontrar_proximo_horario_disponivel(profissional, data_desejada=None):
     ).values_list('data_hora', flat=True)
 
     horarios_ocupados = [dt.replace(second=0, microsecond=0) for dt in agendamentos]
+    agora = timezone_now()
 
     for horario in horarios_possiveis:
-        if horario.replace(second=0, microsecond=0) not in horarios_ocupados and horario > timezone_now():
+        if horario.replace(second=0, microsecond=0) not in horarios_ocupados and horario > agora:
+            print(f"✅ Próximo horário disponível: {horario}")
             return horario
+
+    print("❌ Nenhum horário disponível encontrado.")
     return None
 
 # 🤖 Função tradicional para análise automática
@@ -61,10 +81,10 @@ def analisar_resposta_e_agendar(reply, phone, client_config):
         defaults={"nome": "Novo contato", "grau_interesse": "médio"}
     )
 
-    profissional = ClientUser.objects.filter(client=client_config, ativo=True).first()
-    if not profissional:
-        print("⚠️ Nenhum profissional ativo encontrado.")
-        return
+    profissional = ClientUser.objects.filter(client=client_config, ativo=True)
+    if unidade_id:
+        profissional = profissional.filter(unidade_id=unidade_id)
+    profissional = profissional.first()
 
     data_hora = encontrar_proximo_horario_disponivel(profissional)
     if not data_hora or data_hora < timezone_now():
@@ -82,6 +102,28 @@ def analisar_resposta_e_agendar(reply, phone, client_config):
 
     enviar_mensagem_whatsapp(profissional, pessoa, data_hora, client_config)
     print(f"✅ Agendamento criado para {data_hora.strftime('%d/%m/%Y %H:%M')}")
+    # Envia para o profissional
+    # Envia para o número da unidade (caso exista)
+    if profissional.unidade and profissional.unidade.telefone:
+        texto_unidade = (
+            f"📋 Novo agendamento para a unidade *{profissional.unidade.nome}*:\n"
+            f"👤 Paciente: {pessoa.nome}\n"
+            f"🧑‍⚕️ Profissional: {profissional.nome}\n"
+            f"🕒 Horário: {data_hora.strftime('%A, %d/%m às %H:%M')}"
+        )
+
+        payload = {
+            "phone": profissional.unidade.telefone,
+            "message": texto_unidade
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Client-Token": client_config.zapi_token
+        }
+        requests.post(client_config.zapi_url_text, json=payload, headers=headers)
+
+        print(f"📲 Aviso enviado para unidade {profissional.unidade.nome} no número {profissional.unidade.telefone}")
+
 
 # 🧠 Função para Function Calling
 def gessie_agendar_consulta(
@@ -94,6 +136,7 @@ def gessie_agendar_consulta(
     data_preferida: str,
     profissional: str,
     client_config,
+    unidade_id: int = None,
 ):
     print("📋 Iniciando agendamento via Function Calling...")
     try:
@@ -130,11 +173,16 @@ def gessie_agendar_consulta(
         except ValueError:
             return {"erro": "Formato de data inválido. Use YYYY-MM-DD."}
 
-        profissional_obj = ClientUser.objects.filter(
+        # 🔍 Buscar profissional com filtro por unidade
+        query = ClientUser.objects.filter(
             nome__iexact=profissional,
             client=client_config,
             ativo=True
-        ).first()
+        )
+        if unidade_id:
+            query = query.filter(unidade_id=unidade_id)
+
+        profissional_obj = query.first()
 
         if not profissional_obj:
             return {"erro": f"Profissional '{profissional}' não encontrado ou inativo."}
@@ -146,22 +194,54 @@ def gessie_agendar_consulta(
 
         horarios_ocupados = [dt.replace(second=0, microsecond=0) for dt in agendamentos]
 
+        agora = timezone_now()
+        horario_escolhido = None
+
         for h in horarios_desejados:
             dt = datetime.combine(data_obj, datetime.strptime(h, "%H:%M").time())
-            if dt.replace(second=0, microsecond=0) not in horarios_ocupados and dt > timezone_now():
-                agendamento = Appointment.objects.create(
-                    client=client_config,
-                    person=pessoa,
-                    client_user=profissional_obj,
-                    data_hora=dt,
-                    profissional=profissional_obj.nome,
-                    confirmado=True
-                )
-                enviar_mensagem_whatsapp(profissional_obj, pessoa, dt, client_config)
+            if dt.replace(second=0, microsecond=0) not in horarios_ocupados and dt > agora:
+                horario_escolhido = dt
+                break
 
-                return {"status": "Agendado com sucesso", "data": dt.strftime("%d/%m/%Y %H:%M"), "profissional": profissional_obj.nome}
+        if not horario_escolhido:
+            return {"erro": f"Nenhum horário disponível para {profissional_obj.nome} nessa data e turno."}
 
-        return {"erro": f"Nenhum horário disponível para {profissional_obj.nome} nessa data e turno."}
+        agendamento = Appointment.objects.create(
+            client=client_config,
+            person=pessoa,
+            client_user=profissional_obj,
+            data_hora=horario_escolhido,
+            profissional=profissional_obj.nome,
+            confirmado=True
+        )
+
+        enviar_mensagem_whatsapp(profissional_obj, pessoa, horario_escolhido, client_config)
+
+        return {
+            "status": "Agendado com sucesso",
+            "data": horario_escolhido.strftime("%d/%m/%Y %H:%M"),
+            "profissional": profissional_obj.nome
+        }
+        # Envia para o número da unidade (caso exista)
+        if profissional.unidade and profissional.unidade.telefone:
+            texto_unidade = (
+                f"📋 Novo agendamento para a unidade *{profissional.unidade.nome}*:\n"
+                f"👤 Paciente: {pessoa.nome}\n"
+                f"🧑‍⚕️ Profissional: {profissional.nome}\n"
+                f"🕒 Horário: {data_hora.strftime('%A, %d/%m às %H:%M')}"
+            )
+
+            payload = {
+                "phone": profissional.unidade.telefone,
+                "message": texto_unidade
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Client-Token": client_config.zapi_token
+            }
+            requests.post(client_config.zapi_url_text, json=payload, headers=headers)
+
+            print(f"📲 Aviso enviado para unidade {profissional.unidade.nome} no número {profissional.unidade.telefone}")
 
     except Exception as e:
         print("❌ Erro ao agendar consulta:", e)

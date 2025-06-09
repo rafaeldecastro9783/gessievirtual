@@ -27,6 +27,7 @@ def listar_profissionais(client_config):
 
 def process_buffered_message(phone):
     from bot.models import Person, ClientUser, Appointment, ClientConfig
+    from .gessie_decisoes import analisar_resposta_e_agendar
     from bot.utils import (
         salvar_agendamento,
         enviar_mensagem_whatsapp,
@@ -204,6 +205,16 @@ def process_buffered_message(phone):
 
                         registrar_mensagem(phone, f"[FUNÇÃO]: {tool_call.function.name}\n{args}", "gessie", client_config)
                         print(phone, f"[FUNÇÃO]: {tool_call.function.name}\n{args}", "gessie", client_config)
+
+                    elif tool_call.function.name == "func_listar_profissionais_com_disponibilidade":
+                        from bot.utils import listar_profissionais_com_disponibilidade
+                        result = listar_profissionais_com_disponibilidade(client_config, args.get("unidade_id"))
+
+                    elif tool_call.function.name == "analisar_resposta_e_agendar":
+                        from bot.gessie_decisoes import analisar_resposta_e_agendar
+                        analisar_resposta_e_agendar(args["resposta"], args["telefone"], client_config)
+                        result = {"status": "executado"}
+
 
                     elif tool_call.function.name == "gessie_agendar_consulta":
                         from bot.utils import avisar_profissional
