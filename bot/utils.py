@@ -249,7 +249,7 @@ def salvar_agendamento(arguments, client_config, phone):
             client=client_config,
             person=person,
             client_user=profissional_obj,
-            profissional=profissional_obj.nome,
+            profissional=profissional_obj,
             data_hora=data_hora_agendamento,
             observacoes=observacoes,
             confirmado=True,
@@ -257,30 +257,30 @@ def salvar_agendamento(arguments, client_config, phone):
 
         from bot.utils import enviar_mensagem_whatsapp, avisar_profissional
         if client_config and client_config.zapi_token and client_config.zapi_url_text:
-            enviar_mensagem_whatsapp(usuario=client_config, pessoa=person, data_hora=data_hora_agendamento, client_config=client_config)
-
-        if profissional_obj and profissional_obj.telefone:
+            enviar_mensagem_whatsapp(profissional=profissional_obj, person=person, data_hora=data_hora_agendamento, client_config=client_config)
             avisar_profissional(profissional_nome=profissional_obj.nome, data_hora=data_hora_agendamento, pessoa_nome=person.nome, client_config=client_config)
-        # Envia para o número da unidade (caso exista)
-        if profissional.unidade and profissional.unidade.telefone:
-            texto_unidade = (
-                f"📋 Novo agendamento para a unidade *{profissional.unidade.nome}*:\n"
-                f"👤 Paciente: {pessoa.nome}\n"
-                f"🧑‍⚕️ Profissional: {profissional.nome}\n"
-                f"🕒 Horário: {data_hora.strftime('%A, %d/%m às %H:%M')}"
-            )
 
-            payload = {
-                "phone": profissional.unidade.telefone,
-                "message": texto_unidade
-            }
-            headers = {
-                "Content-Type": "application/json",
-                "Client-Token": client_config.zapi_token
-            }
-            requests.post(client_config.zapi_url_text, json=payload, headers=headers)
+        if profissional_obj.unidades.exists():
+            unidade = profissional_obj.unidades.first()
+            if unidade.telefone:
+                texto_unidade = (
+                    f"📋 Novo agendamento para a unidade *{unidade.nome}*:\n"
+                    f"👤 Paciente: {person.nome}\n"
+                    f"🧑‍⚕️ Profissional: {profissional_obj.nome}\n"
+                    f"🕒 Horário: {data_hora_agendamento.strftime('%A, %d/%m às %H:%M')}"
+                )
 
-            print(f"📲 Aviso enviado para unidade {profissional.unidade.nome} no número {profissional.unidade.telefone}")
+                payload = {
+                    "phone": unidade.telefone,
+                    "message": texto_unidade
+                }
+                headers = {
+                    "Content-Type": "application/json",
+                    "Client-Token": client_config.zapi_token
+                }
+                requests.post(client_config.zapi_url_text, json=payload, headers=headers)
+
+                print(f"📲 Aviso enviado para unidade {unidade.nome} no número {unidade.telefone}")
 
         print("✅ Agendamento salvo com sucesso!")
         return agendamento
@@ -291,7 +291,9 @@ def salvar_agendamento(arguments, client_config, phone):
 
 def obter_horarios_disponiveis_por_data(profissional, data_desejada):
     from bot.models import Disponibilidade, Appointment
+    from django.utils.timezone import make_aware, is_naive
     from datetime import datetime
+    import pytz
     import calendar
 
     print('Entrou na função obter_horarios_disponiveis_por_data')
@@ -313,6 +315,10 @@ def obter_horarios_disponiveis_por_data(profissional, data_desejada):
         print('⚠️ Nenhuma disponibilidade cadastrada para esse dia.')
         return []
 
+    if not disponibilidade.horarios:
+        print("⚠️ Lista de horários vazia para o profissional.")
+        return []
+
     horarios_disponiveis = disponibilidade.horarios
 
     # Buscar agendamentos ocupados
@@ -325,25 +331,30 @@ def obter_horarios_disponiveis_por_data(profissional, data_desejada):
 
     # Listar apenas horários livres
     horarios_livres = []
-    agora = datetime.now()
+    agora = make_aware(datetime.now(), pytz.timezone("America/Sao_Paulo"))
+    print(f"Horários disponíveis para {profissional.nome} no dia {data_desejada}: {horarios_disponiveis}")
 
     for h in horarios_disponiveis:
-        dt = datetime.combine(data_desejada, datetime.strptime(h, "%H:%M").time())
+        dt_naive = datetime.combine(data_desejada, datetime.strptime(h, "%H:%M").time())
+        dt = make_aware(dt_naive, pytz.timezone("America/Sao_Paulo")) if is_naive(dt_naive) else dt_naive
+
         if dt.time() not in horarios_ocupados and (dt > agora or data_desejada > agora.date()):
             horarios_livres.append(dt)
 
-    return horarios_livres
 
+    return sorted(horarios_livres)
 
-def verificar_disponibilidade_consulta(arguments, client_config):
-    from bot.models import ClientUser
+def verificar_disponibilidade_consulta(arguments, client_config, unidade_id=None):
+    from bot.models import ClientUser, Disponibilidade, UnidadeDeAtendimento
     from datetime import datetime, timedelta
+    from django.utils.timezone import make_aware, is_naive
+    from datetime import datetime
     import pytz
 
     print('Entrou na função verificar_disponibilidade_consulta')
 
     try:
-        unidade_id = arguments.get("unidade_id")
+        unidades = arguments.get("unidade_id")
         turno = arguments.get("turno", "").lower()
         dia_semana = arguments.get("dia", "").lower()
         profissional_nome = arguments.get("profissional")
@@ -435,35 +446,52 @@ def listar_compromissos_profissional(profissional, client_config):
     return texto
 
 
-def listar_profissionais(client_config):
-    """
-    Lista os profissionais ativos e suas especialidades.
-    Exemplo de retorno:
-    [
-        {"nome": "Alessandra Remígio", "especialidades": ["Psicoterapia", "TCC"]},
-        {"nome": "Neumar Félix", "especialidades": ["Neuropsicologia"]}
-    ]
-    """
+def listar_profissionais(client_config, unidade_id=None):
     from bot.models import ClientUser
-    print('Entrou na função Listar_Profissionais')
-    profissionais = ClientUser.objects.filter(client=client_config, ativo=True).prefetch_related("especialidades")
+
+    profissionais = ClientUser.objects.filter(client=client_config, ativo=True)
+    if unidade_id:
+        profissionais = profissionais.filter(unidades__id=unidade_id)
 
     return [
         {
             "nome": p.nome,
-            "especialidades": [e.nome for e in p.especialidades.all()]
+            "especialidades": [e.nome for e in p.especialidades.all()],
+            "unidades": [u.nome for u in p.unidades.all()],
+            "disponibilidade": [
+                {
+                    "dia": d.dia_semana,
+                    "horarios": d.horarios
+                } for d in p.disponibilidades.all()
+            ]
         }
         for p in profissionais
     ]
+
 def formatar_lista_profissionais(profissionais):
     """
-    Recebe a lista detalhada e devolve uma string pronta pro WhatsApp.
+    Formata a lista com nome, especialidades, unidades e disponibilidade.
     """
     linhas = ["👩‍⚕️ Profissionais disponíveis:"]
     for i, p in enumerate(profissionais, 1):
-        especialidades = ", ".join(p["especialidades"])
-        linhas.append(f"{i}. {p['nome']} – {especialidades}")
-    return "\n".join(linhas)
+        especialidades = ", ".join(p["especialidades"]) or "Nenhuma"
+        unidades = ", ".join(p["unidades"]) or "Não vinculado a nenhuma unidade"
+        
+        if p["disponibilidade"]:
+            disponibilidade_formatada = "\n    ".join(
+                f"{d['dia'].capitalize()}: {', '.join(d['horarios']) if d['horarios'] else 'Nenhum horário'}"
+                for d in p["disponibilidade"]
+            )
+        else:
+            disponibilidade_formatada = "Sem horários cadastrados"
+
+        linhas.append(
+            f"{i}. {p['nome']}\n"
+            f"   🏥 Unidades: {unidades}\n"
+            f"   💼 Especialidades: {especialidades}\n"
+            f"   🕒 Disponibilidade:\n    {disponibilidade_formatada}"
+        )
+    return "\n\n".join(linhas)
 
 def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"):
     from bot.models import Person, Conversation, ClientUser, Message, User
@@ -473,19 +501,18 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
 
     try:
         client_user = None
+        conversation = None
 
         if enviado_por == "usuario" and phone == client_config.telefone:
             print("📨 Mensagem enviada pelo número conectado (fromMe)")
 
-            # Busca a última conversa do cliente para saber o destinatário
             last_conversa = Conversation.objects.filter(client=client_config).order_by('-updated_at').first()
             if not last_conversa:
-                print("⚠️ Nenhuma conversa encontrada para enviar a mensagem do sistema")
+                print("⚠️ Nenhuma conversa encontrada para identificar destinatário")
                 return
 
             phone_destino = last_conversa.phone
 
-            # Garante Person e Conversation do destinatário
             person, _ = Person.objects.get_or_create(
                 telefone=phone_destino,
                 client=client_config,
@@ -496,24 +523,27 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
                 client=client_config
             )
 
-            # Garante ClientUser do número conectado
             client_user = ClientUser.objects.filter(telefone=phone, client=client_config).first()
             if not client_user:
-                user = User.objects.create_user(
+                user, _ = User.objects.get_or_create(
                     username=f"sistema_{client_config.id}",
-                    password="senha_segura123",
-                    first_name="Sistema"
-                )
-                client_user = ClientUser.objects.create(
-                    user=user,
-                    client=client_config,
-                    nome="Sistema",
-                    telefone=phone,
-                    email=f"sistema_{client_config.id}@softdotpro.com"
+                    defaults={
+                        "password": "senha_segura123",
+                        "first_name": "Sistema"
+                    }
                 )
 
+                client_user, _ = ClientUser.objects.get_or_create(
+                    user=user,
+                    defaults={
+                        "client": client_config,
+                        "nome": "Sistema",
+                        "telefone": phone,
+                        "email": f"sistema_{client_config.id}@softdotpro.com"
+                    }
+                )
         else:
-            # Mensagem recebida de uma pessoa externa
+            # Mensagem recebida ou enviada para uma pessoa externa
             person, _ = Person.objects.get_or_create(
                 telefone=phone,
                 client=client_config,
@@ -524,7 +554,6 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
                 client=client_config
             )
 
-        # Salva a mensagem
         Message.objects.create(
             conversation=conversation,
             person=person,
@@ -535,17 +564,18 @@ def registrar_mensagem(phone, mensagem, enviado_por, client_config, tipo="texto"
             data=now()
         )
 
-        # Atualiza nome da pessoa se for identificável no conteúdo
+        # Atualiza nome da pessoa se mensagem começar com "me chamo" ou "sou"
         if enviado_por == "pessoa" and person.nome == person.telefone:
             msg_lower = mensagem.lower()
             if msg_lower.startswith("me chamo ") or msg_lower.startswith("sou "):
-                nome_extraido = mensagem.replace("me chamo", "").replace("sou", "").strip().split(" ")[0]
+                nome_extraido = mensagem.split(" ", 2)[-1].strip().split(" ")[0]
                 if nome_extraido.isalpha():
                     person.nome = nome_extraido.capitalize()
                     person.save()
 
     except Exception as e:
         print("⚠️ Erro ao registrar mensagem:", e)
+
 
 def listar_agendamentos_futuros(person):
     print('Listando agendamentos futuros...')
@@ -643,13 +673,13 @@ def obter_regra(client_config, chave, default=None):
         print(f"⚠️ Erro ao obter regra '{chave}':", e)
         return default
 
-def enviar_mensagem_whatsapp(client_user, person, data_hora, client_config, texto=None):
+def enviar_mensagem_whatsapp(profissional, person, data_hora, client_config, texto=None):
     print('Entrou na função enviar_mensagem_whatsapp')
     if not person.telefone:
         print("⚠️ Número de telefone do usuário não encontrado!")
         return
     if not texto:
-        texto = f"Olá {person.telefone}, você tem um novo agendamento com {client_user.nome} no dia {data_hora.strftime('%d/%m/%Y %H:%M')}."
+        texto = f"Olá {person.telefone}, você tem um novo agendamento com {profissional.nome} no dia {data_hora.strftime('%d/%m/%Y %H:%M')}."
 
     payload = {
         "phone": person.telefone,
@@ -710,3 +740,49 @@ def avisar_profissional(profissional_nome, data_hora, pessoa_nome, client_config
 
     except Exception as e:
         print("❌ Erro em avisar_profissional:", e)
+
+
+def listar_unidades_de_atendimento(client_config):
+    """
+    Lista as unidades de atendimento do cliente com dados completos.
+    Exemplo de retorno:
+    [
+        {
+            "nome": "Clínica Central",
+            "endereco": "Rua X, 123 - Centro",
+            "telefone": "(11) 99999-0000",
+            "email": "contato@clinica.com",
+            "cnpj": "00.000.000/0001-00"
+        },
+        ...
+    ]
+    """
+    from bot.models import UnidadeDeAtendimento
+
+    unidades = UnidadeDeAtendimento.objects.filter(client=client_config)
+
+    return [
+        {
+            "nome": u.nome,
+            "endereco": u.endereco,
+            "telefone": u.telefone or "Não informado",
+            "email": u.email or "Não informado",
+            "cnpj": u.cnpj or "Não informado"
+        }
+        for u in unidades
+    ]
+
+def formatar_lista_unidades(unidades):
+    """
+    Formata a lista de unidades para envio via WhatsApp.
+    """
+    linhas = ["🏥 Unidades de Atendimento:"]
+    for i, u in enumerate(unidades, 1):
+        linhas.append(
+            f"{i}. {u['nome']}\n"
+            f"   📍 Endereço: {u['endereco']}\n"
+            f"   ☎️ Telefone: {u['telefone']}\n"
+            f"   ✉️ E-mail: {u['email']}\n"
+            f"   🧾 CNPJ: {u['cnpj']}"
+        )
+    return "\n\n".join(linhas)

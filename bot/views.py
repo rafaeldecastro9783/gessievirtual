@@ -8,6 +8,7 @@ from bot.utils import listar_profissionais as listar_profissionais_detalhado, ex
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
+from pytz import timezone
 from bot.api_condomob import consultar_boleto_condomob
 import os
 import locale
@@ -122,8 +123,46 @@ def process_buffered_message(phone):
             )
             return  # ⚡️ Sai do process_buffered_message agora! Não precisa mais esperar!
 
-        openai.beta.threads.messages.create(thread_id=thread_id, role="user", content=combined_message)
-        run = openai.beta.threads.runs.create(thread_id=thread_id, assistant_id=client_config.assistant_id)
+        from pytz import timezone
+        from datetime import datetime
+
+        datenow = datetime.now(timezone("America/Maceio")).strftime("%d/%m/%Y às %H:%M")
+
+        # Verifica se o thread é válido
+        try:
+            existing_messages = openai.beta.threads.messages.list(thread_id=thread_id).data
+        except Exception as e:
+            print(f"❌ Erro ao verificar mensagens do thread {thread_id}: {e}")
+            return
+
+        # Envia mensagem system com data/hora do atendimento se for o início
+        if not existing_messages:
+            try:
+                openai.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=f"[contexto] Este atendimento foi iniciado em {datenow} (horário de Brasília)."
+                )
+                print(f"📌 Mensagem de início registrada no thread {thread_id}")
+            except Exception as e:
+                print(f"❌ Erro ao criar mensagem de início: {e}")
+                return
+
+        # Envia mensagem do usuário
+        try:
+            openai.beta.threads.messages.create(thread_id=thread_id, role="user", content=combined_message)
+        except Exception as e:
+            print(f"❌ Erro ao adicionar mensagem do usuário: {e}")
+            return
+
+        # Inicia a run
+        try:
+            run = openai.beta.threads.runs.create(thread_id=thread_id, assistant_id=client_config.assistant_id)
+            print(f"💬 Nova run iniciada para {phone} em {datenow} | Thread: {thread_id}")
+        except Exception as e:
+            print(f"❌ Erro ao iniciar a run: {e}")
+            return
+
 
         for _ in range(90):
             run_status = openai.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
@@ -207,29 +246,67 @@ def process_buffered_message(phone):
                         print(phone, f"[FUNÇÃO]: {tool_call.function.name}\n{args}", "gessie", client_config)
 
                     elif tool_call.function.name == "func_listar_profissionais_com_disponibilidade":
-                        from bot.utils import listar_profissionais_com_disponibilidade
-                        result = listar_profissionais_com_disponibilidade(client_config, args.get("unidade_id"))
+                        from bot.utils import listar_profissionais
+                        result = listar_profissionais(client_config, args.get("unidade_id"))
 
                     elif tool_call.function.name == "analisar_resposta_e_agendar":
                         from bot.gessie_decisoes import analisar_resposta_e_agendar
-                        analisar_resposta_e_agendar(args["resposta"], args["telefone"], client_config)
-                        result = {"status": "executado"}
 
+                        try:
+                            print("📊 Chamando analisar_resposta_e_agendar com os seguintes dados:")
+                            print(f"📞 Telefone: {args['telefone']}")
+                            print(f"💬 Resposta: {args['resposta']}")
 
-                    elif tool_call.function.name == "gessie_agendar_consulta":
-                        from bot.utils import avisar_profissional
-                        agendamento = salvar_agendamento(args, client_config, phone)
-                        if agendamento:
-                            enviar_mensagem_whatsapp(usuario=client_config, pessoa=agendamento.person, data_hora=agendamento.data_hora, client_config=client_config)
-                            avisar_profissional(
-                                profissional_nome=agendamento.profissional,
-                                data_hora=agendamento.data_hora,
-                                pessoa_nome=agendamento.person.nome,
+                            resultado = analisar_resposta_e_agendar(
+                                resposta=args["resposta"],
+                                telefone=args["telefone"],
                                 client_config=client_config
                             )
+
+                            result = {"status": "executado", "detalhes": resultado}
+
+                        except Exception as e:
+                            print(f"❌ Erro ao executar analisar_resposta_e_agendar: {e}")
+                            result = {"status": "erro", "mensagem": str(e)}
+
+
+                    elif tool_call.function.name == "listar_unidades_de_atendimento":
+                        from bot.utils import listar_unidades_de_atendimento, formatar_lista_unidades
+                        unidades = listar_unidades_de_atendimento(client_config)
+                        texto = formatar_lista_unidades(unidades)
+                        result = {"mensagem": texto}
+
+                    elif tool_call.function.name == "gessie_agendar_consulta":
+                        from bot.utils import avisar_profissional, enviar_mensagem_whatsapp
+                        import locale
+
+                        agendamento = salvar_agendamento(args, client_config, phone)
+                        if agendamento:
+                            # Envia mensagem para o paciente
+                            enviar_mensagem_whatsapp(
+                                client_user=agendamento.profissional,
+                                person=agendamento.person,
+                                data_hora=agendamento.data_hora,
+                                client_config=client_config
+                            )
+
+                            # Avisa o profissional
+                            avisar_profissional(
+                                profissional_obj=agendamento.profissional,
+                                data_hora=agendamento.data_hora,
+                                pessoa_obj=agendamento.person,
+                                client_config=client_config
+                            )
+
+                            # Define localidade para formato de data em português
+                            try:
+                                locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
+                            except locale.Error:
+                                locale.setlocale(locale.LC_TIME, '')  # fallback para o padrão do sistema
+
                             reply = (
-                                f"✅ Agendamento confirmado com {agendamento.profissional} para "
-                                f"{agendamento.data_hora.strftime('%A, %d/%m às %H:%M')}! Nos vemos na clínica 💙"
+                                f"✅ Agendamento confirmado com {agendamento.profissional.nome} para "
+                                f"{agendamento.data_hora.strftime('%A, %d de %B às %H:%M')}."
                             )
 
                             # VALORES PARTICULARES
